@@ -835,9 +835,8 @@ if (isset($_GET['msg'])) {
             <!-- FOOTER CON CLASES ESPECÍFICAS -->
             <footer class="footer-reporte">
                 <div class="pull-right">
-                    <i class="fa fa-calendar"></i> <?php echo date('d/m/Y H:i:s'); ?> | 
-                    Sistema de Reportes RANSA v1.0 | 
-                    <?php echo $sede_usuario === 'ADMIN' ? 'Vista Administrador' : 'Sede: ' . $sede_usuario; ?>
+                    <i class="fa fa-calendar"></i> 
+                    Sistema Ransa Archivo - Bolivia
                 </div>
                 <div class="clearfix"></div>
             </footer>

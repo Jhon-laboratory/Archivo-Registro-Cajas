@@ -851,8 +851,8 @@ try {
             <!-- FOOTER CON CLASES ESPECÍFICAS -->
             <footer class="footer-traslado">
                 <div class="pull-right">
-                    <i class="fa fa-calendar"></i> <?php echo date('d/m/Y H:i:s'); ?> | 
-                    Sistema de Traslados RANSA v1.0
+                    <i class="fa fa-calendar"></i>
+                    Sistema Ransa Archivo - Bolivia 
                 </div>
                 <div class="clearfix"></div>
             </footer>

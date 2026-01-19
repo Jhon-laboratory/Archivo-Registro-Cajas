@@ -33,6 +33,26 @@ $historico = [];
 $usuario_actual = $_SESSION['usuario'];
 $sede_usuario = $_SESSION['tienda'];
 
+// Función para ajustar hora -5 horas
+function horaAjustada($fecha_hora = null) {
+    if ($fecha_hora) {
+        // Si es un objeto DateTime
+        if ($fecha_hora instanceof DateTime) {
+            $fecha_ajustada = clone $fecha_hora;
+            $fecha_ajustada->modify('-5 hours');
+            return $fecha_ajustada;
+        }
+        // Si es string
+        else if (is_string($fecha_hora)) {
+            $fecha_obj = new DateTime($fecha_hora);
+            $fecha_obj->modify('-5 hours');
+            return $fecha_obj;
+        }
+    }
+    // Si no se pasa parámetro, devuelve hora actual ajustada
+    return date('d/m/Y H:i:s', strtotime('-5 hours'));
+}
+
 // Conectar a la base de datos
 try {
     $connectionInfo = array(
@@ -59,9 +79,13 @@ try {
         
         if ($stmt_cajas && sqlsrv_execute($stmt_cajas)) {
             while ($row = sqlsrv_fetch_array($stmt_cajas, SQLSRV_FETCH_ASSOC)) {
-                // Formatear fecha
+                // Formatear fecha ajustando -5 horas
                 if ($row['FechaHora'] instanceof DateTime) {
-                    $row['FechaHora'] = $row['FechaHora']->format('d/m/Y H:i:s');
+                    $fecha_ajustada = horaAjustada($row['FechaHora']);
+                    $row['FechaHora'] = $fecha_ajustada->format('d/m/Y H:i:s');
+                } else if (is_string($row['FechaHora'])) {
+                    $fecha_ajustada = horaAjustada($row['FechaHora']);
+                    $row['FechaHora'] = $fecha_ajustada->format('d/m/Y H:i:s');
                 }
                 $cajas[] = $row;
             }
@@ -79,9 +103,13 @@ try {
         
         if ($stmt_historico && sqlsrv_execute($stmt_historico)) {
             while ($row = sqlsrv_fetch_array($stmt_historico, SQLSRV_FETCH_ASSOC)) {
-                // Formatear fecha
+                // Formatear fecha ajustando -5 horas
                 if ($row['FechaHora'] instanceof DateTime) {
-                    $row['FechaHora'] = $row['FechaHora']->format('d/m/Y H:i:s');
+                    $fecha_ajustada = horaAjustada($row['FechaHora']);
+                    $row['FechaHora'] = $fecha_ajustada->format('d/m/Y H:i:s');
+                } else if (is_string($row['FechaHora'])) {
+                    $fecha_ajustada = horaAjustada($row['FechaHora']);
+                    $row['FechaHora'] = $fecha_ajustada->format('d/m/Y H:i:s');
                 }
                 $historico[] = $row;
             }
@@ -117,7 +145,7 @@ try {
                                   SET LPN = ?, Ubicacion = ?, Usuario = ?, FechaHora = ?
                                   WHERE ID_Caja = ? AND LPN = ? AND Sede = ?";
                     
-                    $fecha_actual = date('Y-m-d H:i:s');
+                    $fecha_actual = date('Y-m-d H:i:s', strtotime('-5 hours')); // AJUSTE -5 HORAS
                     $params_update = array(
                         $nuevo_lpn,
                         $nueva_ubicacion ?: $caja['Ubicacion'],
@@ -210,7 +238,7 @@ try {
                                       SET LPN = ?, Ubicacion = ?, Usuario = ?, FechaHora = ?
                                       WHERE ID_Caja = ?";
                         
-                        $fecha_actual = date('Y-m-d H:i:s');
+                        $fecha_actual = date('Y-m-d H:i:s', strtotime('-5 hours')); // AJUSTE -5 HORAS
                         $params_update = array(
                             $nuevo_lpn_individual ?: $caja_original['LPN'],
                             $nueva_ubicacion_individual ?: $caja_original['Ubicacion'],
@@ -830,7 +858,9 @@ if (isset($_GET['msg'])) {
 
             <!-- CONTENIDO PRINCIPAL CON CLASES DEL TEMPLATE -->
             <div class="right_col" role="main">
-                
+                <div class="page-title">
+                    
+                </div>
                 
                 <div class="clearfix"></div>
                 
@@ -1089,7 +1119,19 @@ if (isset($_GET['msg'])) {
                                     </div>
                                 </div>
 
-                                
+                                <!-- Instrucciones -->
+                                <div class="instructions">
+                                    <h5><i class="fa fa-lightbulb-o"></i> Instrucciones de Uso:</h5>
+                                    <ul>
+                                        <li><strong>Modificación Grupal:</strong> Cambia LPN/Ubicación de TODAS las cajas del pallet</li>
+                                        <li><strong>Modificación Individual:</strong> Edite cada caja por separado usando los campos</li>
+                                        <li><strong>LPN:</strong> Si cambia el LPN, el pallet se "traslada" a otro código</li>
+                                        <li><strong>Ubicación:</strong> Cambia la ubicación física del pallet/caja</li>
+                                        <li><strong>Ctrl+S:</strong> Guarda cambios individuales</li>
+                                        <li><strong>Ctrl+G:</strong> Va al formulario grupal</li>
+                                        <li><strong>Esc:</strong> Cancela la edición actual</li>
+                                    </ul>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1099,8 +1141,8 @@ if (isset($_GET['msg'])) {
             <!-- FOOTER CON CLASES ESPECÍFICAS -->
             <footer class="footer-detalle">
                 <div class="pull-right">
-                    <i class="fa fa-calendar"></i> <?php echo date('d/m/Y H:i:s'); ?> | 
-                    Detalle LPN v1.0 | LPN: <?php echo htmlspecialchars($lpn_original); ?>
+                    <i class="fa fa-calendar"></i> 
+                    Sistema Ransa Archivo - Bolivia
                 </div>
                 <div class="clearfix"></div>
             </footer>

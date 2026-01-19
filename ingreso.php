@@ -40,8 +40,22 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         // Preparar datos del usuario
         $usuario = $_SESSION['usuario'];
         $sede = $_SESSION['tienda'];
-        $fecha_hora = date('Y-m-d H:i:s');
-        $fecha_formateada = date('d/m/Y H:i:s');
+        
+        // ============================================
+        // CORRECCIÓN: AJUSTAR HORA -4 HORAS
+        // ============================================
+        $timezone_offset = -5; // Ajustar 4 horas hacia atrás
+        $fecha_hora_servidor = date('Y-m-d H:i:s');
+        $fecha_hora = date('Y-m-d H:i:s', strtotime("$timezone_offset hours"));
+        
+        // También formatear para mostrar
+        $fecha_formateada = date('d/m/Y H:i:s', strtotime("$timezone_offset hours"));
+        
+        // ============================================
+        // LOG para debug (opcional)
+        // ============================================
+        error_log("Hora servidor: $fecha_hora_servidor");
+        error_log("Hora ajustada (-4): $fecha_hora");
         
         // Procesar múltiples registros si existen
         $registros_procesados = 0;
@@ -88,7 +102,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         $id_caja,
                         $ubicacion,
                         $usuario,
-                        $fecha_hora,
+                        $fecha_hora,  // Usa la hora ajustada aquí
                         $sede
                     );
                     
@@ -130,7 +144,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         $lpn,
                         $cantidad_cajas,
                         $ubicacion_lpn,
-                        $fecha_hora,
+                        $fecha_hora,  // Usa la hora ajustada aquí también
                         $usuario,
                         $accion,
                         $sede
@@ -153,6 +167,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             if ($registros_procesados > 0) {
                 $mensaje = "✅ $registros_procesados registro(s) insertado(s) correctamente.";
                 $mensaje .= "<br>📍 <strong>Sede registrada:</strong> $sede";
+                $mensaje .= "<br>🕐 <strong>Hora registrada:</strong> $fecha_formateada (ajustada -4h)";
                 
                 if ($historico_insertados > 0) {
                     $mensaje .= "<br>📜 $historico_insertados registro(s) en Historico.";
@@ -660,8 +675,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             <!-- FOOTER CON CLASES ESPECÍFICAS -->
             <footer class="footer-ingreso">
                 <div class="pull-right">
-                    <i class="fa fa-calendar"></i> <?php echo date('d/m/Y H:i:s'); ?> | 
-                    Sistema de Ingreso RANSA v1.0
+                    <i class="fa fa-calendar"></i> 
+                    Sistema Ransa Archivo - Bolivia 
                 </div>
                 <div class="clearfix"></div>
             </footer>

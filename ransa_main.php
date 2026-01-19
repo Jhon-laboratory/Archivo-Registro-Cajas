@@ -584,7 +584,7 @@ $mensaje = isset($_GET['msg']) ? urldecode($_GET['msg']) : '';
                                 <!-- Sección de Bienvenida -->
                                 <div class="welcome-section">
                                     <div class="welcome-title">
-                                        <span><i class="fa fa-home"></i> Sistema RANSA - Radiofrecuencia</span>
+                                        <span><i class="fa fa-home"></i> Sistema RANSA - Dashboard </span>
                                         <div class="user-info-card">
                                             <i class="fa fa-user"></i> <?php echo htmlspecialchars($_SESSION['usuario'] ?? 'Usuario'); ?>
                                             <i class="fa fa-building"></i> <?php echo htmlspecialchars($_SESSION['tienda'] ?? 'Sede Principal'); ?>
@@ -759,9 +759,8 @@ $mensaje = isset($_GET['msg']) ? urldecode($_GET['msg']) : '';
             <!-- FOOTER CON CLASES ESPECÍFICAS -->
             <footer class="footer-dashboard">
                 <div class="pull-right">
-                    <i class="fa fa-clock-o"></i> <span id="footer-clock"><?php echo date('H:i:s'); ?></span> | 
-                    Sistema RANSA RF v1.0 | 
-                    <?php echo $sede_usuario === 'ADMIN' ? 'Vista Administrador' : 'Sede: ' . $sede_usuario; ?>
+                    <i class="fa fa-clock-o"></i>
+                    Sistema Ransa Archivo - Bolivia 
                 </div>
                 <div class="clearfix"></div>
             </footer>
