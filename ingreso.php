@@ -47,6 +47,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $timezone_offset = -5; // Ajustar 4 horas hacia atrás
         $fecha_hora_servidor = date('Y-m-d H:i:s');
         $fecha_hora = date('Y-m-d H:i:s', strtotime("$timezone_offset hours"));
+        // Solo la fecha para las nuevas tablas Master
+        $fecha_solo = date('Y-m-d', strtotime("$timezone_offset hours"));
         
         // También formatear para mostrar
         $fecha_formateada = date('d/m/Y H:i:s', strtotime("$timezone_offset hours"));
@@ -56,6 +58,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         // ============================================
         error_log("Hora servidor: $fecha_hora_servidor");
         error_log("Hora ajustada (-4): $fecha_hora");
+        error_log("Fecha para Master tables: $fecha_solo");
         
         // Procesar múltiples registros si existen
         $registros_procesados = 0;
@@ -65,15 +68,21 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         // Agrupar registros por LPN para el histórico
         $registros_por_lpn = [];
         
+        // Conjuntos para evitar duplicados en las nuevas tablas Master
+        $lpns_unicos = [];
+        $idcajas_unicos = [];
+        $ubicaciones_unicas = [];
+        
         // Obtener datos del formulario
         if (isset($_POST['lpn']) && is_array($_POST['lpn'])) {
-            // Primera pasada: Agrupar por LPN y contar cajas
+            // Primera pasada: Agrupar por LPN y contar cajas, y recolectar datos únicos
             foreach ($_POST['lpn'] as $index => $lpn) {
                 $lpn = trim($lpn);
                 $id_caja = isset($_POST['id_caja'][$index]) ? trim($_POST['id_caja'][$index]) : '';
                 $ubicacion = isset($_POST['ubicacion'][$index]) ? trim($_POST['ubicacion'][$index]) : '';
                 
                 if (!empty($lpn) && !empty($id_caja) && !empty($ubicacion)) {
+                    // Agrupar para histórico
                     if (!isset($registros_por_lpn[$lpn])) {
                         $registros_por_lpn[$lpn] = [
                             'cantidad' => 0,
@@ -81,6 +90,19 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         ];
                     }
                     $registros_por_lpn[$lpn]['cantidad']++;
+                    
+                    // Recolectar datos únicos para las nuevas tablas Master
+                    if (!empty($lpn) && !isset($lpns_unicos[$lpn])) {
+                        $lpns_unicos[$lpn] = true;
+                    }
+                    
+                    if (!empty($id_caja) && !isset($idcajas_unicos[$id_caja])) {
+                        $idcajas_unicos[$id_caja] = true;
+                    }
+                    
+                    if (!empty($ubicacion) && !isset($ubicaciones_unicas[$ubicacion])) {
+                        $ubicaciones_unicas[$ubicacion] = true;
+                    }
                 }
             }
             
@@ -122,6 +144,71 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         $registros_con_error++;
                         $errores_detalle[] = "Error preparando MasterTable registro $index: " . print_r(sqlsrv_errors(), true);
                     }
+                }
+            }
+            
+            // ============================================
+            // NUEVO: INSERTAR EN TABLAS MASTER ADICIONALES
+            // ============================================
+            
+            $masterlpn_insertados = 0;
+            $mastercaja_insertados = 0;
+            $masterubicacion_insertados = 0;
+            
+            // Insertar LPNs únicos en MasterLPN
+            foreach (array_keys($lpns_unicos) as $lpn) {
+                try {
+                    $sql_masterlpn = "INSERT INTO DPL.pruebas.MasterLPN (lpn, fecha, sede) 
+                                     VALUES (?, ?, ?)";
+                    
+                    $params_masterlpn = array($lpn, $fecha_solo, $sede);
+                    $stmt_masterlpn = sqlsrv_prepare($conn, $sql_masterlpn, $params_masterlpn);
+                    
+                    if ($stmt_masterlpn && sqlsrv_execute($stmt_masterlpn)) {
+                        $masterlpn_insertados++;
+                    }
+                    sqlsrv_free_stmt($stmt_masterlpn);
+                } catch (Exception $e) {
+                    // Ignorar errores de duplicados (UNIQUE constraint)
+                    error_log("Error insertando LPN $lpn en MasterLPN: " . $e->getMessage());
+                }
+            }
+            
+            // Insertar IDs de caja únicos en MasterCaja
+            foreach (array_keys($idcajas_unicos) as $idcaja) {
+                try {
+                    $sql_mastercaja = "INSERT INTO DPL.pruebas.MasterCaja (IdCaja, fecha, sede) 
+                                      VALUES (?, ?, ?)";
+                    
+                    $params_mastercaja = array($idcaja, $fecha_solo, $sede);
+                    $stmt_mastercaja = sqlsrv_prepare($conn, $sql_mastercaja, $params_mastercaja);
+                    
+                    if ($stmt_mastercaja && sqlsrv_execute($stmt_mastercaja)) {
+                        $mastercaja_insertados++;
+                    }
+                    sqlsrv_free_stmt($stmt_mastercaja);
+                } catch (Exception $e) {
+                    // Ignorar errores de duplicados (UNIQUE constraint)
+                    error_log("Error insertando IdCaja $idcaja en MasterCaja: " . $e->getMessage());
+                }
+            }
+            
+            // Insertar ubicaciones únicas en MasterUbicacion
+            foreach (array_keys($ubicaciones_unicas) as $ubicacion) {
+                try {
+                    $sql_masterubicacion = "INSERT INTO DPL.pruebas.MasterUbicacion (Ubicacion, fecha, sede) 
+                                          VALUES (?, ?, ?)";
+                    
+                    $params_masterubicacion = array($ubicacion, $fecha_solo, $sede);
+                    $stmt_masterubicacion = sqlsrv_prepare($conn, $sql_masterubicacion, $params_masterubicacion);
+                    
+                    if ($stmt_masterubicacion && sqlsrv_execute($stmt_masterubicacion)) {
+                        $masterubicacion_insertados++;
+                    }
+                    sqlsrv_free_stmt($stmt_masterubicacion);
+                } catch (Exception $e) {
+                    // Ignorar errores de duplicados (UNIQUE constraint)
+                    error_log("Error insertando Ubicacion $ubicacion en MasterUbicacion: " . $e->getMessage());
                 }
             }
             
@@ -169,14 +256,20 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 $mensaje .= "<br>📍 <strong>Sede registrada:</strong> $sede";
                 $mensaje .= "<br>🕐 <strong>Hora registrada:</strong> $fecha_formateada (ajustada -4h)";
                 
+                // Información sobre las nuevas tablas Master
+                $mensaje .= "<br><br><strong>📊 Registros en tablas Master:</strong>";
+                $mensaje .= "<br>• <strong>MasterLPN:</strong> $masterlpn_insertados LPN(s) único(s)";
+                $mensaje .= "<br>• <strong>MasterCaja:</strong> $mastercaja_insertados ID(s) de caja único(s)";
+                $mensaje .= "<br>• <strong>MasterUbicacion:</strong> $masterubicacion_insertados ubicacion(es) única(s)";
+                
                 if ($historico_insertados > 0) {
-                    $mensaje .= "<br>📜 $historico_insertados registro(s) en Historico.";
+                    $mensaje .= "<br><br>📜 $historico_insertados registro(s) en Historico.";
                 } else {
-                    $mensaje .= "<br>⚠️ <strong>Nota:</strong> No se pudo guardar el registro histórico.";
+                    $mensaje .= "<br><br>⚠️ <strong>Nota:</strong> No se pudo guardar el registro histórico.";
                 }
                 
                 if ($registros_con_error > 0) {
-                    $mensaje .= "<br>⚠️ Hubo $registros_con_error error(es).";
+                    $mensaje .= "<br>⚠️ Hubo $registros_con_error error(es) en MasterTable.";
                 }
             } else {
                 $error = "❌ No se insertaron registros. Verifique que los campos obligatorios estén completos.";
@@ -691,384 +784,362 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <script src="build/js/custom.min.js"></script>
 
     <script>
-        // Variables globales
-        let contadorFilas = 0;
-        let ultimoLPN = '<?php echo htmlspecialchars($ultimo_lpn); ?>';
-        let ultimaUbicacion = '<?php echo htmlspecialchars($ultima_ubicacion); ?>';
-        let usuario = '<?php echo htmlspecialchars($_SESSION['usuario'] ?? ''); ?>';
-        let sede = '<?php echo htmlspecialchars($_SESSION['tienda'] ?? ''); ?>';
+    // Variables globales
+    let contadorFilas = 0;
+    let ultimoLPN = '<?php echo htmlspecialchars($ultimo_lpn); ?>';
+    let ultimaUbicacion = '<?php echo htmlspecialchars($ultima_ubicacion); ?>';
+    let usuario = '<?php echo htmlspecialchars($_SESSION['usuario'] ?? ''); ?>';
+    let sede = '<?php echo htmlspecialchars($_SESSION['tienda'] ?? ''); ?>';
 
-        // ============================================
-        // FUNCIONES DEL MENÚ LATERAL (EXACTAMENTE IGUALES)
-        // ============================================
+    // ============================================
+    // FUNCIONES DEL MENÚ LATERAL (EXACTAMENTE IGUALES)
+    // ============================================
+    
+    // Función para cerrar sesión (IGUAL)
+    function cerrarSesion() {
+        if (confirm('¿Está seguro de que desea cerrar sesión?')) {
+            window.location.href = 'logout.php';
+        }
+    }
+
+    // Toggle del menú en dispositivos móviles (EXACTAMENTE IGUAL)
+    document.getElementById('menu_toggle').addEventListener('click', function() {
+        const leftCol = document.querySelector('.left_col');
+        leftCol.classList.toggle('menu-open');
+    });
+
+    // ============================================
+    // FUNCIONES PARA EL FORMULARIO DE INGRESO
+    // ============================================
+    
+    // Función para obtener fecha y hora actual
+    function obtenerFechaHora() {
+        const ahora = new Date();
+        const fecha = ahora.toLocaleDateString('es-ES');
+        const hora = ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        return `${fecha} ${hora}`;
+    }
+
+    // Función para obtener fecha y hora en formato SQL
+    function obtenerFechaHoraSQL() {
+        const ahora = new Date();
+        return ahora.toISOString().slice(0, 19).replace('T', ' ');
+    }
+
+    // Función para agregar una fila a la tabla
+    function agregarFila(propagarDatos = true) {
+        const tbody = document.getElementById('cuerpoTabla');
+        contadorFilas++;
         
-        // Función para cerrar sesión (IGUAL)
-        function cerrarSesion() {
-            if (confirm('¿Está seguro de que desea cerrar sesión?')) {
-                window.location.href = 'logout.php';
-            }
-        }
-
-        // Toggle del menú en dispositivos móviles (EXACTAMENTE IGUAL)
-        document.getElementById('menu_toggle').addEventListener('click', function() {
-            const leftCol = document.querySelector('.left_col');
-            leftCol.classList.toggle('menu-open');
-        });
-
-        // ============================================
-        // FUNCIONES PARA EL FORMULARIO DE INGRESO
-        // ============================================
+        const numeroFila = contadorFilas;
+        const fechaHora = obtenerFechaHora();
         
-        // Función para obtener fecha y hora actual
-        function obtenerFechaHora() {
-            const ahora = new Date();
-            const fecha = ahora.toLocaleDateString('es-ES');
-            const hora = ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            return `${fecha} ${hora}`;
-        }
-
-        // Función para obtener fecha y hora en formato SQL
-        function obtenerFechaHoraSQL() {
-            const ahora = new Date();
-            return ahora.toISOString().slice(0, 19).replace('T', ' ');
-        }
-
-        // Función para agregar una fila a la tabla
-        function agregarFila(propagarDatos = true) {
-            const tbody = document.getElementById('cuerpoTabla');
-            contadorFilas++;
-            
-            const numeroFila = contadorFilas;
-            const fechaHora = obtenerFechaHora();
-            
-            // Obtener datos de la fila anterior si se deben propagar
-            let lpnValor = '';
-            let ubicacionValor = '';
-            
-            if (propagarDatos && numeroFila > 1) {
-                const filaAnterior = document.getElementById(`fila-${numeroFila - 1}`);
-                if (filaAnterior) {
-                    const inputLPNAnterior = filaAnterior.querySelector('input[name="lpn[]"]');
-                    const inputUbicacionAnterior = filaAnterior.querySelector('input[name="ubicacion[]"]');
-                    
-                    if (inputLPNAnterior) lpnValor = inputLPNAnterior.value;
-                    if (inputUbicacionAnterior) ubicacionValor = inputUbicacionAnterior.value;
-                }
+        // Obtener datos de la fila anterior si se deben propagar
+        let lpnValor = '';
+        let ubicacionValor = '';
+        
+        if (propagarDatos && numeroFila > 1) {
+            const filaAnterior = document.getElementById(`fila-${numeroFila - 1}`);
+            if (filaAnterior) {
+                const inputLPNAnterior = filaAnterior.querySelector('input[name="lpn[]"]');
+                const inputUbicacionAnterior = filaAnterior.querySelector('input[name="ubicacion[]"]');
+                
+                if (inputLPNAnterior) lpnValor = inputLPNAnterior.value;
+                if (inputUbicacionAnterior) ubicacionValor = inputUbicacionAnterior.value;
             }
-            
-            // Auto-generar ID de caja basado en LPN
-            let idCajaValor = '';
-            if (lpnValor) {
-                const contadorCajas = contarCajasPorLPN(lpnValor) + 1;
-                idCajaValor = lpnValor + '-CAJA-' + contadorCajas.toString().padStart(3, '0');
-            }
-            
-            // Crear nueva fila
-            const nuevaFila = document.createElement('tr');
-            nuevaFila.id = `fila-${numeroFila}`;
-            nuevaFila.className = 'row-new';
-            
-            nuevaFila.innerHTML = `
-                <td style="text-align: center; font-weight: bold;">${numeroFila}</td>
-                <td>
-                    <input type="text" 
-                           class="table-input" 
-                           name="lpn[]" 
-                           placeholder="PALLET-001"
-                           onchange="actualizarLPN(${numeroFila})"
-                           onkeydown="manejarTeclado(event, ${numeroFila}, 'lpn')"
-                           value="${lpnValor}">
-                </td>
-                <td>
-                    <input type="text" 
-                           class="table-input" 
-                           name="id_caja[]" 
-                           placeholder="CAJA-001"
-                           onkeydown="manejarTeclado(event, ${numeroFila}, 'id_caja')"
-                           value="${idCajaValor}">
-                </td>
-                <td>
-                    <input type="text" 
-                           class="table-input" 
-                           name="ubicacion[]" 
-                           placeholder="RACK-01-A"
-                           onchange="actualizarUbicacion(${numeroFila})"
-                           onkeydown="manejarTeclado(event, ${numeroFila}, 'ubicacion')"
-                           value="${ubicacionValor}">
-                </td>
-                <td>
-                    <input type="text" 
-                           class="table-input readonly" 
-                           value="${usuario}" 
-                           readonly>
-                </td>
-                <td>
-                    <input type="text" 
-                           class="table-input readonly small" 
-                           value="${fechaHora}" 
-                           readonly>
-                    <input type="hidden" 
-                           name="fechahora_sql[]" 
-                           value="${obtenerFechaHoraSQL()}">
-                </td>
-                <td>
-                    <input type="text" 
-                           class="table-input readonly small" 
-                           value="${sede}" 
-                           readonly>
-                </td>
-                <td style="text-align: center;">
-                    <button type="button" class="btn-secondary-ingreso btn-small" onclick="eliminarFila(${numeroFila})" title="Eliminar fila">
-                        <i class="fa fa-trash"></i>
-                    </button>
-                </td>
-            `;
-            
-            tbody.appendChild(nuevaFila);
-            actualizarContador();
-            
-            return nuevaFila;
         }
+        
+        // CAMBIO: ID de caja siempre en blanco
+        let idCajaValor = '';
+        
+        // Crear nueva fila
+        const nuevaFila = document.createElement('tr');
+        nuevaFila.id = `fila-${numeroFila}`;
+        nuevaFila.className = 'row-new';
+        
+        nuevaFila.innerHTML = `
+            <td style="text-align: center; font-weight: bold;">${numeroFila}</td>
+            <td>
+                <input type="text" 
+                       class="table-input" 
+                       name="lpn[]" 
+                       placeholder="PALLET-001"
+                       onkeydown="manejarTeclado(event, ${numeroFila}, 'lpn')"
+                       value="${lpnValor}">
+            </td>
+            <td>
+                <input type="text" 
+                       class="table-input" 
+                       name="id_caja[]" 
+                       placeholder="CAJA-001"
+                       onkeydown="manejarTeclado(event, ${numeroFila}, 'id_caja')"
+                       value="${idCajaValor}">
+            </td>
+            <td>
+                <input type="text" 
+                       class="table-input" 
+                       name="ubicacion[]" 
+                       placeholder="RACK-01-A"
+                       onkeydown="manejarTeclado(event, ${numeroFila}, 'ubicacion')"
+                       value="${ubicacionValor}">
+            </td>
+            <td>
+                <input type="text" 
+                       class="table-input readonly" 
+                       value="${usuario}" 
+                       readonly>
+            </td>
+            <td>
+                <input type="text" 
+                       class="table-input readonly small" 
+                       value="${fechaHora}" 
+                       readonly>
+                <input type="hidden" 
+                       name="fechahora_sql[]" 
+                       value="${obtenerFechaHoraSQL()}">
+            </td>
+            <td>
+                <input type="text" 
+                       class="table-input readonly small" 
+                       value="${sede}" 
+                       readonly>
+            </td>
+            <td style="text-align: center;">
+                <button type="button" class="btn-secondary-ingreso btn-small" onclick="eliminarFila(${numeroFila})" title="Eliminar fila">
+                    <i class="fa fa-trash"></i>
+                </button>
+            </td>
+        `;
+        
+        tbody.appendChild(nuevaFila);
+        actualizarContador();
+        
+        return nuevaFila;
+    }
 
-        // Función para contar cajas por LPN
-        function contarCajasPorLPN(lpn) {
-            let contador = 0;
-            document.querySelectorAll('input[name="lpn[]"]').forEach(input => {
-                if (input.value === lpn) {
-                    const fila = input.closest('tr');
-                    const inputIdCaja = fila.querySelector('input[name="id_caja[]"]');
-                    if (inputIdCaja && inputIdCaja.value) contador++;
-                }
-            });
-            return contador;
-        }
-
-        // Función para actualizar LPN y regenerar IDs de caja
-        function actualizarLPN(filaId) {
-            const fila = document.getElementById(`fila-${filaId}`);
-            if (!fila) return;
-            
-            const inputLPN = fila.querySelector('input[name="lpn[]"]');
-            const lpn = inputLPN.value.trim();
-            
-            if (!lpn) return;
-            
-            // Actualizar IDs de caja para todas las filas con este LPN
-            const filasConMismoLPN = [];
-            document.querySelectorAll('input[name="lpn[]"]').forEach((input, index) => {
-                if (input.value === lpn) {
-                    const fila = input.closest('tr');
-                    filasConMismoLPN.push(fila);
-                }
-            });
-            
-            // Re-generar IDs de caja en orden
-            filasConMismoLPN.forEach((fila, index) => {
+    // Función para contar cajas por LPN (se mantiene pero ya no se usa para autocompletar)
+    function contarCajasPorLPN(lpn) {
+        let contador = 0;
+        document.querySelectorAll('input[name="lpn[]"]').forEach(input => {
+            if (input.value === lpn) {
+                const fila = input.closest('tr');
                 const inputIdCaja = fila.querySelector('input[name="id_caja[]"]');
-                if (inputIdCaja && !inputIdCaja.readOnly) {
-                    inputIdCaja.value = lpn + '-CAJA-' + (index + 1).toString().padStart(3, '0');
-                }
-            });
-        }
+                if (inputIdCaja && inputIdCaja.value) contador++;
+            }
+        });
+        return contador;
+    }
 
-        // Función para actualizar ubicación
-        function actualizarUbicacion(filaId) {
-            const fila = document.getElementById(`fila-${filaId}`);
-            if (!fila) return;
-        }
+    // Función para actualizar LPN (MODIFICADA: Ya NO regenera IDs de caja)
+    function actualizarLPN(filaId) {
+        const fila = document.getElementById(`fila-${filaId}`);
+        if (!fila) return;
+        
+        const inputLPN = fila.querySelector('input[name="lpn[]"]');
+        const lpn = inputLPN.value.trim();
+        
+        if (!lpn) return;
+        
+        // CAMBIO: Ya NO se actualizan automáticamente los IDs de caja
+        // Se deja vacío para que el usuario ingrese manualmente
+    }
 
-        // Función para eliminar una fila
-        function eliminarFila(id) {
-            const fila = document.getElementById(`fila-${id}`);
-            if (fila) {
-                fila.remove();
-                contadorFilas--;
-                actualizarContador();
-                reordenarNumeros();
-                
-                // Si no hay filas, agregar una nueva
-                if (contadorFilas === 0) {
-                    agregarFila(false);
-                }
+    // Función para actualizar ubicación
+    function actualizarUbicacion(filaId) {
+        const fila = document.getElementById(`fila-${filaId}`);
+        if (!fila) return;
+    }
+
+    // Función para eliminar una fila
+    function eliminarFila(id) {
+        const fila = document.getElementById(`fila-${id}`);
+        if (fila) {
+            fila.remove();
+            contadorFilas--;
+            actualizarContador();
+            reordenarNumeros();
+            
+            // Si no hay filas, agregar una nueva
+            if (contadorFilas === 0) {
+                agregarFila(false);
             }
         }
+    }
 
-        // Función para reordenar números de fila
-        function reordenarNumeros() {
-            const filas = document.querySelectorAll('#cuerpoTabla tr');
-            filas.forEach((fila, index) => {
-                const celdaNumero = fila.querySelector('td:first-child');
-                if (celdaNumero) {
-                    celdaNumero.textContent = (index + 1);
-                    fila.id = `fila-${index + 1}`;
-                    
-                    // Actualizar eventos
-                    const inputs = fila.querySelectorAll('input');
-                    inputs.forEach(input => {
-                        if (input.name === 'lpn[]') {
-                            input.setAttribute('onchange', `actualizarLPN(${index + 1})`);
-                            input.setAttribute('onkeydown', `manejarTeclado(event, ${index + 1}, 'lpn')`);
-                        } else if (input.name === 'id_caja[]') {
-                            input.setAttribute('onkeydown', `manejarTeclado(event, ${index + 1}, 'id_caja')`);
-                        } else if (input.name === 'ubicacion[]') {
-                            input.setAttribute('onchange', `actualizarUbicacion(${index + 1})`);
-                            input.setAttribute('onkeydown', `manejarTeclado(event, ${index + 1}, 'ubicacion')`);
-                        }
-                    });
-                    
-                    // Actualizar botón de eliminar
-                    const botonEliminar = fila.querySelector('button');
-                    if (botonEliminar) {
-                        botonEliminar.setAttribute('onclick', `eliminarFila(${index + 1})`);
-                    }
-                }
-            });
-            
-            // Actualizar contadorFilas
-            contadorFilas = filas.length;
-        }
-
-        // Función para actualizar contador
-        function actualizarContador() {
-            const contador = document.getElementById('contadorRegistros');
-            const texto = contadorFilas === 1 ? '1 registro' : `${contadorFilas} registros`;
-            contador.textContent = texto;
-        }
-
-        // Función para manejar teclado
-        function manejarTeclado(event, filaId, campo) {
-            const tecla = event.key;
-            
-            if (tecla === 'Enter') {
-                event.preventDefault();
+    // Función para reordenar números de fila
+    function reordenarNumeros() {
+        const filas = document.querySelectorAll('#cuerpoTabla tr');
+        filas.forEach((fila, index) => {
+            const celdaNumero = fila.querySelector('td:first-child');
+            if (celdaNumero) {
+                celdaNumero.textContent = (index + 1);
+                fila.id = `fila-${index + 1}`;
                 
-                // Si es la última fila y todos los campos están llenos, agregar nueva fila
-                if (filaId === contadorFilas) {
-                    const fila = document.getElementById(`fila-${filaId}`);
-                    const inputLPN = fila.querySelector('input[name="lpn[]"]');
-                    const inputIdCaja = fila.querySelector('input[name="id_caja[]"]');
-                    const inputUbicacion = fila.querySelector('input[name="ubicacion[]"]');
-                    
-                    // Verificar que todos los campos obligatorios estén llenos
-                    if (inputLPN.value.trim() && inputIdCaja.value.trim() && inputUbicacion.value.trim()) {
-                        // Agregar nueva fila automáticamente
-                        const nuevaFila = agregarFila(true);
-                        
-                        // Focus en el campo ID Caja de la nueva fila después de un breve delay
-                        setTimeout(() => {
-                            if (nuevaFila) {
-                                const nuevoInputIdCaja = nuevaFila.querySelector('input[name="id_caja[]"]');
-                                if (nuevoInputIdCaja) {
-                                    nuevoInputIdCaja.focus();
-                                    nuevoInputIdCaja.select();
-                                }
-                            }
-                        }, 50);
-                    } else {
-                        // Si faltan campos, mover al siguiente campo
-                        moverSiguienteCampo(filaId, campo);
+                // Actualizar eventos
+                const inputs = fila.querySelectorAll('input');
+                inputs.forEach(input => {
+                    if (input.name === 'lpn[]') {
+                        input.setAttribute('onkeydown', `manejarTeclado(event, ${index + 1}, 'lpn')`);
+                    } else if (input.name === 'id_caja[]') {
+                        input.setAttribute('onkeydown', `manejarTeclado(event, ${index + 1}, 'id_caja')`);
+                    } else if (input.name === 'ubicacion[]') {
+                        input.setAttribute('onkeydown', `manejarTeclado(event, ${index + 1}, 'ubicacion')`);
                     }
+                });
+                
+                // Actualizar botón de eliminar
+                const botonEliminar = fila.querySelector('button');
+                if (botonEliminar) {
+                    botonEliminar.setAttribute('onclick', `eliminarFila(${index + 1})`);
+                }
+            }
+        });
+        
+        // Actualizar contadorFilas
+        contadorFilas = filas.length;
+    }
+
+    // Función para actualizar contador
+    function actualizarContador() {
+        const contador = document.getElementById('contadorRegistros');
+        const texto = contadorFilas === 1 ? '1 registro' : `${contadorFilas} registros`;
+        contador.textContent = texto;
+    }
+
+    // Función para manejar teclado
+    function manejarTeclado(event, filaId, campo) {
+        const tecla = event.key;
+        
+        if (tecla === 'Enter') {
+            event.preventDefault();
+            
+            // Si es la última fila y todos los campos están llenos, agregar nueva fila
+            if (filaId === contadorFilas) {
+                const fila = document.getElementById(`fila-${filaId}`);
+                const inputLPN = fila.querySelector('input[name="lpn[]"]');
+                const inputIdCaja = fila.querySelector('input[name="id_caja[]"]');
+                const inputUbicacion = fila.querySelector('input[name="ubicacion[]"]');
+                
+                // Verificar que todos los campos obligatorios estén llenos
+                if (inputLPN.value.trim() && inputIdCaja.value.trim() && inputUbicacion.value.trim()) {
+                    // Agregar nueva fila automáticamente
+                    const nuevaFila = agregarFila(true);
+                    
+                    // Focus en el campo ID Caja de la nueva fila después de un breve delay
+                    setTimeout(() => {
+                        if (nuevaFila) {
+                            const nuevoInputIdCaja = nuevaFila.querySelector('input[name="id_caja[]"]');
+                            if (nuevoInputIdCaja) {
+                                nuevoInputIdCaja.focus();
+                                nuevoInputIdCaja.select();
+                            }
+                        }
+                    }, 50);
                 } else {
-                    // Si no es la última fila, mover al siguiente campo
+                    // Si faltan campos, mover al siguiente campo
                     moverSiguienteCampo(filaId, campo);
                 }
-            } else if (event.ctrlKey && tecla === 's') {
-                event.preventDefault();
-                document.getElementById('ingresoForm').submit();
-            } else if (tecla === 'F2') {
-                event.preventDefault();
-                const fila = document.getElementById(`fila-${filaId}`);
-                if (fila) {
-                    const inputIdCaja = fila.querySelector('input[name="id_caja[]"]');
-                    if (inputIdCaja) {
-                        inputIdCaja.focus();
-                        inputIdCaja.select();
-                    }
+            } else {
+                // Si no es la última fila, mover al siguiente campo
+                moverSiguienteCampo(filaId, campo);
+            }
+        } else if (event.ctrlKey && tecla === 's') {
+            event.preventDefault();
+            document.getElementById('ingresoForm').submit();
+        } else if (tecla === 'F2') {
+            event.preventDefault();
+            const fila = document.getElementById(`fila-${filaId}`);
+            if (fila) {
+                const inputIdCaja = fila.querySelector('input[name="id_caja[]"]');
+                if (inputIdCaja) {
+                    inputIdCaja.focus();
+                    inputIdCaja.select();
                 }
             }
         }
+    }
 
-        // Función para mover al siguiente campo
-        function moverSiguienteCampo(filaId, campoActual) {
-            const campos = ['lpn', 'id_caja', 'ubicacion'];
-            const indiceActual = campos.indexOf(campoActual);
-            
-            if (indiceActual < campos.length - 1) {
-                // Mover al siguiente campo en la misma fila
-                const fila = document.getElementById(`fila-${filaId}`);
-                const siguienteCampo = fila.querySelector(`input[name="${campos[indiceActual + 1]}[]"]`);
-                if (siguienteCampo) siguienteCampo.focus();
-            }
+    // Función para mover al siguiente campo
+    function moverSiguienteCampo(filaId, campoActual) {
+        const campos = ['lpn', 'id_caja', 'ubicacion'];
+        const indiceActual = campos.indexOf(campoActual);
+        
+        if (indiceActual < campos.length - 1) {
+            // Mover al siguiente campo en la misma fila
+            const fila = document.getElementById(`fila-${filaId}`);
+            const siguienteCampo = fila.querySelector(`input[name="${campos[indiceActual + 1]}[]"]`);
+            if (siguienteCampo) siguienteCampo.focus();
         }
+    }
 
-        // Función para validar formulario
-        function validarFormulario() {
-            let registrosValidos = 0;
-            let registrosInvalidos = [];
+    // Función para validar formulario
+    function validarFormulario() {
+        let registrosValidos = 0;
+        let registrosInvalidos = [];
+        
+        document.querySelectorAll('#cuerpoTabla tr').forEach((fila, index) => {
+            const lpn = fila.querySelector('input[name="lpn[]"]').value.trim();
+            const idCaja = fila.querySelector('input[name="id_caja[]"]').value.trim();
+            const ubicacion = fila.querySelector('input[name="ubicacion[]"]').value.trim();
             
-            document.querySelectorAll('#cuerpoTabla tr').forEach((fila, index) => {
-                const lpn = fila.querySelector('input[name="lpn[]"]').value.trim();
-                const idCaja = fila.querySelector('input[name="id_caja[]"]').value.trim();
-                const ubicacion = fila.querySelector('input[name="ubicacion[]"]').value.trim();
-                
-                if (lpn && idCaja && ubicacion) {
-                    registrosValidos++;
-                } else {
-                    registrosInvalidos.push(index + 1);
-                }
-            });
-            
-            if (registrosValidos === 0) {
-                alert('No hay registros válidos para guardar. Complete al menos un registro completo (LPN, ID Caja y Ubicación).');
+            if (lpn && idCaja && ubicacion) {
+                registrosValidos++;
+            } else {
+                registrosInvalidos.push(index + 1);
+            }
+        });
+        
+        if (registrosValidos === 0) {
+            alert('No hay registros válidos para guardar. Complete al menos un registro completo (LPN, ID Caja y Ubicación).');
+            return false;
+        }
+        
+        if (registrosInvalidos.length > 0) {
+            if (!confirm(`Hay ${registrosInvalidos.length} fila(s) incompleta(s) (filas: ${registrosInvalidos.join(', ')}). ¿Desea guardar solo los registros completos?`)) {
                 return false;
             }
-            
-            if (registrosInvalidos.length > 0) {
-                if (!confirm(`Hay ${registrosInvalidos.length} fila(s) incompleta(s) (filas: ${registrosInvalidos.join(', ')}). ¿Desea guardar solo los registros completos?`)) {
-                    return false;
-                }
-            }
-            
-            // Mostrar loading
-            const botonGuardar = document.getElementById('btnGuardar');
-            const textoOriginal = botonGuardar.innerHTML;
-            botonGuardar.innerHTML = '<span class="loading-spinner"></span> Guardando en MasterTable e Historico...';
-            botonGuardar.disabled = true;
-            
-            // Restaurar botón si hay error (timeout de seguridad)
-            setTimeout(() => {
-                botonGuardar.innerHTML = textoOriginal;
-                botonGuardar.disabled = false;
-            }, 10000);
-            
-            return true;
         }
-
-        // ============================================
-        // INICIALIZACIÓN AL CARGAR LA PÁGINA
-        // ============================================
         
-        document.addEventListener('DOMContentLoaded', function() {
-            // Agregar la primera fila al formulario
-            agregarFila(false);
-            
-            // Focus en el primer campo
-            setTimeout(() => {
-                const primeraFila = document.getElementById('fila-1');
-                if (primeraFila) {
-                    const primerInput = primeraFila.querySelector('input[name="lpn[]"]');
-                    if (primerInput) primerInput.focus();
-                }
-            }, 100);
-            
-            // Atajos de teclado globales
-            document.addEventListener('keydown', function(event) {
-                if (event.ctrlKey && event.key === 's') {
-                    event.preventDefault();
-                    document.getElementById('ingresoForm').submit();
-                }
-            });
+        // Mostrar loading
+        const botonGuardar = document.getElementById('btnGuardar');
+        const textoOriginal = botonGuardar.innerHTML;
+        botonGuardar.innerHTML = '<span class="loading-spinner"></span> Guardando en MasterTable e Historico...';
+        botonGuardar.disabled = true;
+        
+        // Restaurar botón si hay error (timeout de seguridad)
+        setTimeout(() => {
+            botonGuardar.innerHTML = textoOriginal;
+            botonGuardar.disabled = false;
+        }, 10000);
+        
+        return true;
+    }
+
+    // ============================================
+    // INICIALIZACIÓN AL CARGAR LA PÁGINA
+    // ============================================
+    
+    document.addEventListener('DOMContentLoaded', function() {
+        // Agregar la primera fila al formulario
+        agregarFila(false);
+        
+        // Focus en el primer campo
+        setTimeout(() => {
+            const primeraFila = document.getElementById('fila-1');
+            if (primeraFila) {
+                const primerInput = primeraFila.querySelector('input[name="lpn[]"]');
+                if (primerInput) primerInput.focus();
+            }
+        }, 100);
+        
+        // Atajos de teclado globales
+        document.addEventListener('keydown', function(event) {
+            if (event.ctrlKey && event.key === 's') {
+                event.preventDefault();
+                document.getElementById('ingresoForm').submit();
+            }
         });
-    </script>
+    });
+</script>
 </body>
 </html>
