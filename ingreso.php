@@ -1,0 +1,1059 @@
+<?php
+session_start();
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
+
+// Verificar si el usuario está logueado
+if (!isset($_SESSION['usuario']) || !isset($_SESSION['usuario_id'])) {
+    header("Location: login.php");
+    exit;
+}
+
+// Configuración de conexión SQL Server
+$host = 'Jorgeserver.database.windows.net';
+$dbname = 'DPL';
+$username = 'Jmmc';
+$password = 'ChaosSoldier01';
+
+// Variables
+$mensaje = '';
+$error = '';
+$ultimo_lpn = '';
+$ultima_ubicacion = '';
+
+// Procesar formulario
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    // Conexión usando sqlsrv
+    $connectionInfo = array(
+        "Database" => $dbname,
+        "UID" => $username,
+        "PWD" => $password,
+        "CharacterSet" => "UTF-8"
+    );
+    
+    $conn = sqlsrv_connect($host, $connectionInfo);
+    
+    if ($conn === false) {
+        $error = "Error de conexión a la base de datos.";
+        error_log("Error SQL Server: " . print_r(sqlsrv_errors(), true));
+    } else {
+        // Preparar datos del usuario
+        $usuario = $_SESSION['usuario'];
+        $sede = $_SESSION['tienda'];
+        $fecha_hora = date('Y-m-d H:i:s');
+        $fecha_formateada = date('d/m/Y H:i:s');
+        
+        // Procesar múltiples registros si existen
+        $registros_procesados = 0;
+        $registros_con_error = 0;
+        $errores_detalle = [];
+        
+        // Agrupar registros por LPN para el histórico
+        $registros_por_lpn = [];
+        
+        // Obtener datos del formulario
+        if (isset($_POST['lpn']) && is_array($_POST['lpn'])) {
+            // Primera pasada: Agrupar por LPN y contar cajas
+            foreach ($_POST['lpn'] as $index => $lpn) {
+                $lpn = trim($lpn);
+                $id_caja = isset($_POST['id_caja'][$index]) ? trim($_POST['id_caja'][$index]) : '';
+                $ubicacion = isset($_POST['ubicacion'][$index]) ? trim($_POST['ubicacion'][$index]) : '';
+                
+                if (!empty($lpn) && !empty($id_caja) && !empty($ubicacion)) {
+                    if (!isset($registros_por_lpn[$lpn])) {
+                        $registros_por_lpn[$lpn] = [
+                            'cantidad' => 0,
+                            'ubicacion' => $ubicacion
+                        ];
+                    }
+                    $registros_por_lpn[$lpn]['cantidad']++;
+                }
+            }
+            
+            // Segunda pasada: Insertar en MasterTable
+            foreach ($_POST['lpn'] as $index => $lpn) {
+                $lpn = trim($lpn);
+                $id_caja = isset($_POST['id_caja'][$index]) ? trim($_POST['id_caja'][$index]) : '';
+                $ubicacion = isset($_POST['ubicacion'][$index]) ? trim($_POST['ubicacion'][$index]) : '';
+                
+                // Solo procesar si LPN, ID_Caja y Ubicación no están vacíos
+                if (!empty($lpn) && !empty($id_caja) && !empty($ubicacion)) {
+                    // Insertar en la tabla MasterTable CON SEDE
+                    $sql_master = "INSERT INTO DPL.pruebas.MasterTable 
+                                  (LPN, ID_Caja, Ubicacion, Usuario, FechaHora, Sede) 
+                                  VALUES (?, ?, ?, ?, ?, ?)";
+                    
+                    $params_master = array(
+                        $lpn,
+                        $id_caja,
+                        $ubicacion,
+                        $usuario,
+                        $fecha_hora,
+                        $sede
+                    );
+                    
+                    $stmt_master = sqlsrv_prepare($conn, $sql_master, $params_master);
+                    
+                    if ($stmt_master) {
+                        if (sqlsrv_execute($stmt_master)) {
+                            $registros_procesados++;
+                            $ultimo_lpn = $lpn;
+                            $ultima_ubicacion = $ubicacion;
+                        } else {
+                            $registros_con_error++;
+                            $errores_detalle[] = "Error en MasterTable registro $index: " . print_r(sqlsrv_errors(), true);
+                        }
+                        sqlsrv_free_stmt($stmt_master);
+                    } else {
+                        $registros_con_error++;
+                        $errores_detalle[] = "Error preparando MasterTable registro $index: " . print_r(sqlsrv_errors(), true);
+                    }
+                }
+            }
+            
+            // Tercera pasada: Insertar en Historico por cada LPN único
+            $historico_insertados = 0;
+            if ($registros_procesados > 0 && !empty($registros_por_lpn)) {
+                foreach ($registros_por_lpn as $lpn => $datos) {
+                    $cantidad_cajas = $datos['cantidad'];
+                    $ubicacion_lpn = $datos['ubicacion'];
+                    
+                    // Texto más corto y optimizado que incluye sede
+                    $accion = "Ingreso de $cantidad_cajas cajas con el LPN: $lpn, en la ubicacion $ubicacion_lpn por el usuario $usuario en Sede: $sede";
+                    
+                    // Insertar en la tabla Historico CON SEDE
+                    $sql_historico = "INSERT INTO DPL.pruebas.Historico 
+                                     (LPN, CantidadCajas, Ubicacion, FechaHora, Usuario, Accion, Sede) 
+                                     VALUES (?, ?, ?, ?, ?, ?, ?)";
+                    
+                    $params_historico = array(
+                        $lpn,
+                        $cantidad_cajas,
+                        $ubicacion_lpn,
+                        $fecha_hora,
+                        $usuario,
+                        $accion,
+                        $sede
+                    );
+                    
+                    $stmt_historico = sqlsrv_prepare($conn, $sql_historico, $params_historico);
+                    
+                    if ($stmt_historico) {
+                        if (sqlsrv_execute($stmt_historico)) {
+                            $historico_insertados++;
+                        } else {
+                            error_log("Error insertando en Historico para LPN $lpn: " . print_r(sqlsrv_errors(), true));
+                        }
+                        sqlsrv_free_stmt($stmt_historico);
+                    }
+                }
+            }
+            
+            // Mensajes finales
+            if ($registros_procesados > 0) {
+                $mensaje = "✅ $registros_procesados registro(s) insertado(s) correctamente.";
+                $mensaje .= "<br>📍 <strong>Sede registrada:</strong> $sede";
+                
+                if ($historico_insertados > 0) {
+                    $mensaje .= "<br>📜 $historico_insertados registro(s) en Historico.";
+                } else {
+                    $mensaje .= "<br>⚠️ <strong>Nota:</strong> No se pudo guardar el registro histórico.";
+                }
+                
+                if ($registros_con_error > 0) {
+                    $mensaje .= "<br>⚠️ Hubo $registros_con_error error(es).";
+                }
+            } else {
+                $error = "❌ No se insertaron registros. Verifique que los campos obligatorios estén completos.";
+                if (!empty($errores_detalle)) {
+                    $error .= " Detalles: " . implode(" | ", $errores_detalle);
+                }
+            }
+        } else {
+            $error = "❌ No se recibieron datos del formulario.";
+        }
+        
+        sqlsrv_close($conn);
+    }
+}
+?>
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Ingreso Masivo - RANSA</title>
+
+    <!-- CSS del template EXACTAMENTE IGUAL QUE ransa_main.php -->
+    <link href="vendors/bootstrap/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="vendors/font-awesome/css/font-awesome.min.css" rel="stylesheet">
+    <link href="vendors/nprogress/nprogress.css" rel="stylesheet">
+    <link href="vendors/iCheck/skins/flat/green.css" rel="stylesheet">
+    <link href="vendors/select2/dist/css/select2.min.css" rel="stylesheet">
+    <link href="vendors/bootstrap-progressbar/css/bootstrap-progressbar-3.3.4.min.css" rel="stylesheet">
+    <link href="vendors/datatables.net-bs/css/dataTables.bootstrap.min.css" rel="stylesheet">
+    <link href="build/css/custom.min.css" rel="stylesheet">
+
+    <!-- CSS ESPECÍFICO SOLO PARA LA TABLA (NO toca el menú) -->
+    <style>
+        /* Fondo específico para esta página */
+        body.nav-md {
+            background: linear-gradient(rgba(255, 255, 255, 0.97), rgba(255, 255, 255, 0.97)), 
+                        url('img/imglogin.jpg') center/cover no-repeat fixed;
+            min-height: 100vh;
+        }
+        
+        /* Estilos para el contenido específico de ingreso */
+        .welcome-section {
+            background: linear-gradient(135deg, rgba(0, 154, 63, 1), rgba(0, 154, 63, 0.8));
+            color: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 6px 20px rgba(0, 154, 63, 0.2);
+            text-align: center;
+        }
+        
+        .welcome-title {
+            font-weight: 700;
+            margin-bottom: 8px;
+            font-size: 1.6rem;
+        }
+        
+        .user-info-card {
+            background: rgba(255, 255, 255, 0.9);
+            color: #333;
+            padding: 10px 18px;
+            border-radius: 8px;
+            display: inline-block;
+            font-weight: 600;
+            font-size: 12px;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
+            margin-top: 10px;
+        }
+        
+        /* Formulario tipo tabla - SIN afectar el layout del menú */
+        .form-container {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
+            margin-bottom: 20px;
+        }
+        
+        .form-title {
+            color: #333;
+            font-weight: 600;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #eee;
+            font-size: 1.3rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .ingreso-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            margin-bottom: 20px;
+        }
+        
+        .ingreso-table th {
+            background: linear-gradient(135deg, rgba(0, 154, 63, 0.9), rgba(0, 154, 63, 0.7));
+            color: white;
+            padding: 10px 8px;
+            text-align: center;
+            font-weight: 600;
+            border: none;
+        }
+        
+        .ingreso-table td {
+            padding: 8px;
+            border-bottom: 1px solid #f0f0f0;
+            vertical-align: middle;
+        }
+        
+        .ingreso-table tr:hover {
+            background-color: #f9f9f9;
+        }
+        
+        .ingreso-table tr:nth-child(even) {
+            background-color: #fafafa;
+        }
+        
+        .table-input {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 12px;
+            transition: all 0.2s;
+            box-sizing: border-box;
+        }
+        
+        .table-input:focus {
+            border-color: #009a3f;
+            box-shadow: 0 0 0 2px rgba(0, 154, 63, 0.1);
+            outline: none;
+        }
+        
+        .table-input.readonly {
+            background-color: #f5f5f5;
+            color: #666;
+            cursor: not-allowed;
+        }
+        
+        .required-field::after {
+            content: " *";
+            color: #dc3545;
+        }
+        
+        /* Botones específicos para esta página */
+        .btn-ingreso {
+            background: linear-gradient(135deg, #009a3f, #00782f);
+            color: white;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 12px;
+            transition: all 0.2s ease;
+            cursor: pointer;
+            margin: 2px;
+        }
+        
+        .btn-ingreso:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 3px 10px rgba(0, 154, 63, 0.3);
+        }
+        
+        .btn-secondary-ingreso {
+            background: #6c757d;
+            color: white;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 12px;
+            transition: all 0.2s ease;
+            cursor: pointer;
+            margin: 2px;
+        }
+        
+        .btn-secondary-ingreso:hover {
+            background: #5a6268;
+            transform: translateY(-1px);
+        }
+        
+        .btn-small {
+            padding: 4px 8px;
+            font-size: 11px;
+            margin: 1px;
+            min-width: 30px;
+        }
+        
+        .btn-group-ingreso {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        /* Alertas específicas */
+        .alert-ingreso {
+            border-radius: 8px;
+            border: none;
+            padding: 12px 15px;
+            margin-bottom: 15px;
+            font-size: 12px;
+        }
+        
+        .alert-success-ingreso {
+            background: rgba(40, 167, 69, 0.1);
+            color: #155724;
+            border-left: 3px solid #28a745;
+        }
+        
+        .alert-danger-ingreso {
+            background: rgba(220, 53, 69, 0.1);
+            color: #721c24;
+            border-left: 3px solid #dc3545;
+        }
+        
+        /* Controles de tabla */
+        .table-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .table-actions {
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+        
+        .record-counter {
+            font-size: 11px;
+            color: #666;
+            background: #f0f0f0;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        
+        /* Instrucciones */
+        .instructions {
+            background: #f0f8ff;
+            border-left: 3px solid #009a3f;
+            padding: 10px 15px;
+            margin-top: 15px;
+            border-radius: 6px;
+            font-size: 11px;
+        }
+        
+        .instructions h5 {
+            color: #009a3f;
+            margin-bottom: 5px;
+            font-size: 12px;
+        }
+        
+        /* Loading spinner */
+        .loading-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 8px;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Responsive ESPECÍFICO para la tabla (NO afecta el menú) */
+        @media (max-width: 768px) {
+            .welcome-title {
+                font-size: 1.3rem;
+            }
+            
+            .ingreso-table {
+                font-size: 11px;
+                min-width: 700px; /* Para scroll horizontal en móviles */
+            }
+            
+            .table-input {
+                font-size: 11px;
+                padding: 4px 6px;
+            }
+            
+            .btn-group-ingreso {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .btn-ingreso, .btn-secondary-ingreso {
+                width: 100%;
+                max-width: 200px;
+            }
+            
+            .form-container {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+        }
+        
+        /* Footer específico */
+        .footer-ingreso {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(0, 154, 63, 0.08);
+            border-radius: 8px;
+            font-size: 11px;
+        }
+    </style>
+</head>
+
+<body class="nav-md">
+    <div class="container body">
+        <div class="main_container">
+            <!-- SIDEBAR EXACTAMENTE IGUAL QUE ransa_main.php -->
+            <div class="col-md-3 left_col">
+                <div class="left_col scroll-view">
+                    <div class="navbar nav_title" style="border: 0;">
+                        <a href="ransa_main.php" class="site_title">
+                            <img src="img/logo.png" alt="RANSA Logo" style="height: 32px;">
+                            <span style="font-size: 12px; margin-left: 4px;">Ingreso</span>
+                        </a>
+                    </div>
+                    <div class="clearfix"></div>
+
+                    <!-- Información del usuario -->
+                    <div class="profile clearfix">
+                        <div class="profile_info">
+                            <span>Bienvenido,</span>
+                            <h2><?php echo $_SESSION['usuario'] ?? 'Usuario'; ?></h2>
+                            <span><?php echo $_SESSION['correo'] ?? ''; ?></span>
+                        </div>
+                    </div>
+
+                    <br />
+
+                    <!-- MENU EXACTAMENTE IGUAL -->
+                    <div id="sidebar-menu" class="main_menu_side hidden-print main_menu">
+                        <div class="menu_section">
+                            <h3>Navegación</h3>
+                            <ul class="nav side-menu">
+                                <li>
+                                    <a href="ransa_main.php"><i class="fa fa-line-chart"></i> Dashboard</a>
+                                </li>
+                                <li class="active">
+                                    <a href="ingreso.php"><i class="fa fa-archive"></i> Ingreso</a>
+                                </li>
+                                <li>
+                                    <a href="translado.php"><i class="fa fa-refresh"></i> Translado</a>
+                                </li>
+                                <li>
+                                    <a href="reportes.php"><i class="fa fa-bar-chart"></i> Vista</a>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+                    
+                    <!-- FOOTER EXACTAMENTE IGUAL -->
+                    <div class="sidebar-footer hidden-small">
+                        <a title="Actualizar" data-toggle="tooltip" data-placement="top" onclick="location.reload()">
+                            <span class="glyphicon glyphicon-refresh"></span>
+                        </a>
+                        <a title="Salir" data-toggle="tooltip" data-placement="top" onclick="cerrarSesion()">
+                            <span class="glyphicon glyphicon-off"></span>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- NAVBAR SUPERIOR EXACTAMENTE IGUAL -->
+            <div class="top_nav">
+                <div class="nav_menu">
+                    <div class="nav toggle">
+                        <a id="menu_toggle"><i class="fa fa-bars"></i></a>
+                    </div>
+                    <div class="nav navbar-nav navbar-right">
+                        <span style="color: white; padding: 15px; font-weight: 500;">
+                            <i class="fa fa-user-circle"></i> 
+                            <?php echo $_SESSION['usuario'] ?? 'Usuario'; ?>
+                            <small style="opacity: 0.8; margin-left: 10px;">
+                                <i class="fa fa-map-marker"></i> 
+                                <?php echo $_SESSION['tienda'] ?? 'N/A'; ?>
+                            </small>
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CONTENIDO PRINCIPAL CON CLASES DEL TEMPLATE -->
+            <div class="right_col" role="main">
+                
+                
+                <div class="clearfix"></div>
+                
+                <div class="row">
+                    <div class="col-md-12 col-sm-12">
+                        <!-- Sección de Bienvenida -->
+                        
+
+                        <!-- Mensajes -->
+                        <?php if (!empty($mensaje)): ?>
+                            <div class="alert-ingreso alert-success-ingreso">
+                                <i class="fa fa-check-circle"></i> 
+                                <div style="display: inline-block; vertical-align: top;">
+                                    <?php echo $mensaje; ?>
+                                </div>
+                            </div>
+                        <?php endif; ?>
+
+                        <?php if (!empty($error)): ?>
+                            <div class="alert-ingreso alert-danger-ingreso">
+                                <i class="fa fa-exclamation-circle"></i> <?php echo $error; ?>
+                            </div>
+                        <?php endif; ?>
+
+                        <!-- Formulario tipo tabla -->
+                        <div class="x_panel">
+                            <div class="x_title">
+                                <h2><i class="fa fa-table"></i> Ingreso Rápido - Tabla de Registros</h2>
+                                <div class="clearfix"></div>
+                            </div>
+                            <div class="x_content">
+                                <div class="form-container">
+                                    <div class="form-title">
+                                        <span>Ingreso de Cajas por Pallet</span>
+                                        <div class="table-actions">
+                                            <button type="button" class="btn-ingreso btn-small" onclick="agregarFila()">
+                                                <i class="fa fa-plus"></i> Nueva Fila
+                                            </button>
+                                            <span class="record-counter" id="contadorRegistros">1 registro</span>
+                                        </div>
+                                    </div>
+
+                                    <form method="POST" id="ingresoForm" onsubmit="return validarFormulario()">
+                                        <table class="ingreso-table" id="tablaIngreso">
+                                            <thead>
+                                                <tr>
+                                                    <th width="8%">#</th>
+                                                    <th width="16%" class="required-field">LPN</th>
+                                                    <th width="16%" class="required-field">ID Caja</th>
+                                                    <th width="16%" class="required-field">Ubicación</th>
+                                                    <th width="16%">Usuario</th>
+                                                    <th width="13%">Fecha/Hora</th>
+                                                    <th width="11%">Sede</th>
+                                                    <th width="4%">Acción</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="cuerpoTabla">
+                                                <!-- Filas se generan dinámicamente -->
+                                            </tbody>
+                                        </table>
+
+                                        <!-- Botones principales -->
+                                        <div class="btn-group-ingreso">
+                                            <button type="submit" class="btn-ingreso" name="guardar" id="btnGuardar">
+                                                <i class="fa fa-save"></i> Guardar Registros
+                                            </button>
+                                            
+                                            <button type="button" class="btn-secondary-ingreso" onclick="window.location.href='ransa_main.php'">
+                                                <i class="fa fa-arrow-left"></i> Volver al Dashboard
+                                            </button>
+                                        </div>
+                                    </form>
+                                </div>
+
+                                <!-- Instrucciones -->
+                                <div class="instructions">
+                                    <h5><i class="fa fa-lightbulb-o"></i> Instrucciones Rápidas:</h5>
+                                    <ul>
+                                        <li><strong>Enter en cualquier campo:</strong> Crea automáticamente nueva fila para siguiente caja</li>
+                                        <li><strong>LPN:</strong> Mismo número para todas las cajas del mismo pallet</li>
+                                        <li><strong>ID Caja:</strong> Único por cada caja (se auto-incrementa)</li>
+                                        <li><strong>Ubicación:</strong> Misma ubicación para todo el pallet</li>
+                                        <li><strong>Sede:</strong> Se registra automáticamente según su usuario (<?php echo $_SESSION['tienda'] ?? 'N/A'; ?>)</li>
+                                        <li><strong>Ctrl+S:</strong> Guarda todos los registros</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- FOOTER CON CLASES ESPECÍFICAS -->
+            <footer class="footer-ingreso">
+                <div class="pull-right">
+                    <i class="fa fa-calendar"></i> <?php echo date('d/m/Y H:i:s'); ?> | 
+                    Sistema de Ingreso RANSA v1.0
+                </div>
+                <div class="clearfix"></div>
+            </footer>
+        </div>
+    </div>
+
+    <!-- SCRIPTS EXACTAMENTE IGUALES QUE ransa_main.php -->
+    <script src="vendors/jquery/dist/jquery.min.js"></script>
+    <script src="vendors/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="vendors/fastclick/lib/fastclick.js"></script>
+    <script src="vendors/nprogress/nprogress.js"></script>
+    <script src="build/js/custom.min.js"></script>
+
+    <script>
+        // Variables globales
+        let contadorFilas = 0;
+        let ultimoLPN = '<?php echo htmlspecialchars($ultimo_lpn); ?>';
+        let ultimaUbicacion = '<?php echo htmlspecialchars($ultima_ubicacion); ?>';
+        let usuario = '<?php echo htmlspecialchars($_SESSION['usuario'] ?? ''); ?>';
+        let sede = '<?php echo htmlspecialchars($_SESSION['tienda'] ?? ''); ?>';
+
+        // ============================================
+        // FUNCIONES DEL MENÚ LATERAL (EXACTAMENTE IGUALES)
+        // ============================================
+        
+        // Función para cerrar sesión (IGUAL)
+        function cerrarSesion() {
+            if (confirm('¿Está seguro de que desea cerrar sesión?')) {
+                window.location.href = 'logout.php';
+            }
+        }
+
+        // Toggle del menú en dispositivos móviles (EXACTAMENTE IGUAL)
+        document.getElementById('menu_toggle').addEventListener('click', function() {
+            const leftCol = document.querySelector('.left_col');
+            leftCol.classList.toggle('menu-open');
+        });
+
+        // ============================================
+        // FUNCIONES PARA EL FORMULARIO DE INGRESO
+        // ============================================
+        
+        // Función para obtener fecha y hora actual
+        function obtenerFechaHora() {
+            const ahora = new Date();
+            const fecha = ahora.toLocaleDateString('es-ES');
+            const hora = ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            return `${fecha} ${hora}`;
+        }
+
+        // Función para obtener fecha y hora en formato SQL
+        function obtenerFechaHoraSQL() {
+            const ahora = new Date();
+            return ahora.toISOString().slice(0, 19).replace('T', ' ');
+        }
+
+        // Función para agregar una fila a la tabla
+        function agregarFila(propagarDatos = true) {
+            const tbody = document.getElementById('cuerpoTabla');
+            contadorFilas++;
+            
+            const numeroFila = contadorFilas;
+            const fechaHora = obtenerFechaHora();
+            
+            // Obtener datos de la fila anterior si se deben propagar
+            let lpnValor = '';
+            let ubicacionValor = '';
+            
+            if (propagarDatos && numeroFila > 1) {
+                const filaAnterior = document.getElementById(`fila-${numeroFila - 1}`);
+                if (filaAnterior) {
+                    const inputLPNAnterior = filaAnterior.querySelector('input[name="lpn[]"]');
+                    const inputUbicacionAnterior = filaAnterior.querySelector('input[name="ubicacion[]"]');
+                    
+                    if (inputLPNAnterior) lpnValor = inputLPNAnterior.value;
+                    if (inputUbicacionAnterior) ubicacionValor = inputUbicacionAnterior.value;
+                }
+            }
+            
+            // Auto-generar ID de caja basado en LPN
+            let idCajaValor = '';
+            if (lpnValor) {
+                const contadorCajas = contarCajasPorLPN(lpnValor) + 1;
+                idCajaValor = lpnValor + '-CAJA-' + contadorCajas.toString().padStart(3, '0');
+            }
+            
+            // Crear nueva fila
+            const nuevaFila = document.createElement('tr');
+            nuevaFila.id = `fila-${numeroFila}`;
+            nuevaFila.className = 'row-new';
+            
+            nuevaFila.innerHTML = `
+                <td style="text-align: center; font-weight: bold;">${numeroFila}</td>
+                <td>
+                    <input type="text" 
+                           class="table-input" 
+                           name="lpn[]" 
+                           placeholder="PALLET-001"
+                           onchange="actualizarLPN(${numeroFila})"
+                           onkeydown="manejarTeclado(event, ${numeroFila}, 'lpn')"
+                           value="${lpnValor}">
+                </td>
+                <td>
+                    <input type="text" 
+                           class="table-input" 
+                           name="id_caja[]" 
+                           placeholder="CAJA-001"
+                           onkeydown="manejarTeclado(event, ${numeroFila}, 'id_caja')"
+                           value="${idCajaValor}">
+                </td>
+                <td>
+                    <input type="text" 
+                           class="table-input" 
+                           name="ubicacion[]" 
+                           placeholder="RACK-01-A"
+                           onchange="actualizarUbicacion(${numeroFila})"
+                           onkeydown="manejarTeclado(event, ${numeroFila}, 'ubicacion')"
+                           value="${ubicacionValor}">
+                </td>
+                <td>
+                    <input type="text" 
+                           class="table-input readonly" 
+                           value="${usuario}" 
+                           readonly>
+                </td>
+                <td>
+                    <input type="text" 
+                           class="table-input readonly small" 
+                           value="${fechaHora}" 
+                           readonly>
+                    <input type="hidden" 
+                           name="fechahora_sql[]" 
+                           value="${obtenerFechaHoraSQL()}">
+                </td>
+                <td>
+                    <input type="text" 
+                           class="table-input readonly small" 
+                           value="${sede}" 
+                           readonly>
+                </td>
+                <td style="text-align: center;">
+                    <button type="button" class="btn-secondary-ingreso btn-small" onclick="eliminarFila(${numeroFila})" title="Eliminar fila">
+                        <i class="fa fa-trash"></i>
+                    </button>
+                </td>
+            `;
+            
+            tbody.appendChild(nuevaFila);
+            actualizarContador();
+            
+            return nuevaFila;
+        }
+
+        // Función para contar cajas por LPN
+        function contarCajasPorLPN(lpn) {
+            let contador = 0;
+            document.querySelectorAll('input[name="lpn[]"]').forEach(input => {
+                if (input.value === lpn) {
+                    const fila = input.closest('tr');
+                    const inputIdCaja = fila.querySelector('input[name="id_caja[]"]');
+                    if (inputIdCaja && inputIdCaja.value) contador++;
+                }
+            });
+            return contador;
+        }
+
+        // Función para actualizar LPN y regenerar IDs de caja
+        function actualizarLPN(filaId) {
+            const fila = document.getElementById(`fila-${filaId}`);
+            if (!fila) return;
+            
+            const inputLPN = fila.querySelector('input[name="lpn[]"]');
+            const lpn = inputLPN.value.trim();
+            
+            if (!lpn) return;
+            
+            // Actualizar IDs de caja para todas las filas con este LPN
+            const filasConMismoLPN = [];
+            document.querySelectorAll('input[name="lpn[]"]').forEach((input, index) => {
+                if (input.value === lpn) {
+                    const fila = input.closest('tr');
+                    filasConMismoLPN.push(fila);
+                }
+            });
+            
+            // Re-generar IDs de caja en orden
+            filasConMismoLPN.forEach((fila, index) => {
+                const inputIdCaja = fila.querySelector('input[name="id_caja[]"]');
+                if (inputIdCaja && !inputIdCaja.readOnly) {
+                    inputIdCaja.value = lpn + '-CAJA-' + (index + 1).toString().padStart(3, '0');
+                }
+            });
+        }
+
+        // Función para actualizar ubicación
+        function actualizarUbicacion(filaId) {
+            const fila = document.getElementById(`fila-${filaId}`);
+            if (!fila) return;
+        }
+
+        // Función para eliminar una fila
+        function eliminarFila(id) {
+            const fila = document.getElementById(`fila-${id}`);
+            if (fila) {
+                fila.remove();
+                contadorFilas--;
+                actualizarContador();
+                reordenarNumeros();
+                
+                // Si no hay filas, agregar una nueva
+                if (contadorFilas === 0) {
+                    agregarFila(false);
+                }
+            }
+        }
+
+        // Función para reordenar números de fila
+        function reordenarNumeros() {
+            const filas = document.querySelectorAll('#cuerpoTabla tr');
+            filas.forEach((fila, index) => {
+                const celdaNumero = fila.querySelector('td:first-child');
+                if (celdaNumero) {
+                    celdaNumero.textContent = (index + 1);
+                    fila.id = `fila-${index + 1}`;
+                    
+                    // Actualizar eventos
+                    const inputs = fila.querySelectorAll('input');
+                    inputs.forEach(input => {
+                        if (input.name === 'lpn[]') {
+                            input.setAttribute('onchange', `actualizarLPN(${index + 1})`);
+                            input.setAttribute('onkeydown', `manejarTeclado(event, ${index + 1}, 'lpn')`);
+                        } else if (input.name === 'id_caja[]') {
+                            input.setAttribute('onkeydown', `manejarTeclado(event, ${index + 1}, 'id_caja')`);
+                        } else if (input.name === 'ubicacion[]') {
+                            input.setAttribute('onchange', `actualizarUbicacion(${index + 1})`);
+                            input.setAttribute('onkeydown', `manejarTeclado(event, ${index + 1}, 'ubicacion')`);
+                        }
+                    });
+                    
+                    // Actualizar botón de eliminar
+                    const botonEliminar = fila.querySelector('button');
+                    if (botonEliminar) {
+                        botonEliminar.setAttribute('onclick', `eliminarFila(${index + 1})`);
+                    }
+                }
+            });
+            
+            // Actualizar contadorFilas
+            contadorFilas = filas.length;
+        }
+
+        // Función para actualizar contador
+        function actualizarContador() {
+            const contador = document.getElementById('contadorRegistros');
+            const texto = contadorFilas === 1 ? '1 registro' : `${contadorFilas} registros`;
+            contador.textContent = texto;
+        }
+
+        // Función para manejar teclado
+        function manejarTeclado(event, filaId, campo) {
+            const tecla = event.key;
+            
+            if (tecla === 'Enter') {
+                event.preventDefault();
+                
+                // Si es la última fila y todos los campos están llenos, agregar nueva fila
+                if (filaId === contadorFilas) {
+                    const fila = document.getElementById(`fila-${filaId}`);
+                    const inputLPN = fila.querySelector('input[name="lpn[]"]');
+                    const inputIdCaja = fila.querySelector('input[name="id_caja[]"]');
+                    const inputUbicacion = fila.querySelector('input[name="ubicacion[]"]');
+                    
+                    // Verificar que todos los campos obligatorios estén llenos
+                    if (inputLPN.value.trim() && inputIdCaja.value.trim() && inputUbicacion.value.trim()) {
+                        // Agregar nueva fila automáticamente
+                        const nuevaFila = agregarFila(true);
+                        
+                        // Focus en el campo ID Caja de la nueva fila después de un breve delay
+                        setTimeout(() => {
+                            if (nuevaFila) {
+                                const nuevoInputIdCaja = nuevaFila.querySelector('input[name="id_caja[]"]');
+                                if (nuevoInputIdCaja) {
+                                    nuevoInputIdCaja.focus();
+                                    nuevoInputIdCaja.select();
+                                }
+                            }
+                        }, 50);
+                    } else {
+                        // Si faltan campos, mover al siguiente campo
+                        moverSiguienteCampo(filaId, campo);
+                    }
+                } else {
+                    // Si no es la última fila, mover al siguiente campo
+                    moverSiguienteCampo(filaId, campo);
+                }
+            } else if (event.ctrlKey && tecla === 's') {
+                event.preventDefault();
+                document.getElementById('ingresoForm').submit();
+            } else if (tecla === 'F2') {
+                event.preventDefault();
+                const fila = document.getElementById(`fila-${filaId}`);
+                if (fila) {
+                    const inputIdCaja = fila.querySelector('input[name="id_caja[]"]');
+                    if (inputIdCaja) {
+                        inputIdCaja.focus();
+                        inputIdCaja.select();
+                    }
+                }
+            }
+        }
+
+        // Función para mover al siguiente campo
+        function moverSiguienteCampo(filaId, campoActual) {
+            const campos = ['lpn', 'id_caja', 'ubicacion'];
+            const indiceActual = campos.indexOf(campoActual);
+            
+            if (indiceActual < campos.length - 1) {
+                // Mover al siguiente campo en la misma fila
+                const fila = document.getElementById(`fila-${filaId}`);
+                const siguienteCampo = fila.querySelector(`input[name="${campos[indiceActual + 1]}[]"]`);
+                if (siguienteCampo) siguienteCampo.focus();
+            }
+        }
+
+        // Función para validar formulario
+        function validarFormulario() {
+            let registrosValidos = 0;
+            let registrosInvalidos = [];
+            
+            document.querySelectorAll('#cuerpoTabla tr').forEach((fila, index) => {
+                const lpn = fila.querySelector('input[name="lpn[]"]').value.trim();
+                const idCaja = fila.querySelector('input[name="id_caja[]"]').value.trim();
+                const ubicacion = fila.querySelector('input[name="ubicacion[]"]').value.trim();
+                
+                if (lpn && idCaja && ubicacion) {
+                    registrosValidos++;
+                } else {
+                    registrosInvalidos.push(index + 1);
+                }
+            });
+            
+            if (registrosValidos === 0) {
+                alert('No hay registros válidos para guardar. Complete al menos un registro completo (LPN, ID Caja y Ubicación).');
+                return false;
+            }
+            
+            if (registrosInvalidos.length > 0) {
+                if (!confirm(`Hay ${registrosInvalidos.length} fila(s) incompleta(s) (filas: ${registrosInvalidos.join(', ')}). ¿Desea guardar solo los registros completos?`)) {
+                    return false;
+                }
+            }
+            
+            // Mostrar loading
+            const botonGuardar = document.getElementById('btnGuardar');
+            const textoOriginal = botonGuardar.innerHTML;
+            botonGuardar.innerHTML = '<span class="loading-spinner"></span> Guardando en MasterTable e Historico...';
+            botonGuardar.disabled = true;
+            
+            // Restaurar botón si hay error (timeout de seguridad)
+            setTimeout(() => {
+                botonGuardar.innerHTML = textoOriginal;
+                botonGuardar.disabled = false;
+            }, 10000);
+            
+            return true;
+        }
+
+        // ============================================
+        // INICIALIZACIÓN AL CARGAR LA PÁGINA
+        // ============================================
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            // Agregar la primera fila al formulario
+            agregarFila(false);
+            
+            // Focus en el primer campo
+            setTimeout(() => {
+                const primeraFila = document.getElementById('fila-1');
+                if (primeraFila) {
+                    const primerInput = primeraFila.querySelector('input[name="lpn[]"]');
+                    if (primerInput) primerInput.focus();
+                }
+            }, 100);
+            
+            // Atajos de teclado globales
+            document.addEventListener('keydown', function(event) {
+                if (event.ctrlKey && event.key === 's') {
+                    event.preventDefault();
+                    document.getElementById('ingresoForm').submit();
+                }
+            });
+        });
+    </script>
+</body>
+</html>
