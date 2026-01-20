@@ -12,9 +12,10 @@ if (!isset($_SESSION['usuario']) || !isset($_SESSION['usuario_id'])) {
 // Obtener parámetros de la URL
 $lpn_original = isset($_GET['lpn']) ? trim($_GET['lpn']) : '';
 $sede_original = isset($_GET['sede']) ? trim($_GET['sede']) : '';
-$caja_seleccionada = isset($_GET['caja']) ? trim($_GET['caja']) : ''; // NUEVO: ID de caja específica
+$caja_seleccionada = isset($_GET['caja']) ? trim($_GET['caja']) : '';
+$caja_completa = isset($_GET['caja_completa']) ? trim($_GET['caja_completa']) : ''; // NUEVO: ID de caja completa (cliente + C + número)
 
-if (empty($lpn_original) || empty($sede_original)) {
+if (empty($lpn_original) && empty($caja_completa)) {
     header("Location: traslado.php");
     exit;
 }
@@ -27,13 +28,28 @@ $password = 'ChaosSoldier01';
 
 // Variables
 $cajas = [];
-$caja_especifica = null; // NUEVO: Para guardar detalles de la caja seleccionada
+$caja_especifica = null;
 $total_cajas = 0;
 $mensaje = '';
 $error = '';
 $historico = [];
 $usuario_actual = $_SESSION['usuario'];
 $sede_usuario = $_SESSION['tienda'];
+
+// NUEVO: Variables para búsqueda de caja completa
+$busqueda_por_caja_completa = false;
+$id_caja_busqueda = '';
+
+// Determinar tipo de búsqueda
+if (!empty($caja_completa)) {
+    // Búsqueda por ID de caja completo (viene de translado.php)
+    $busqueda_por_caja_completa = true;
+    $id_caja_busqueda = $caja_completa;
+} elseif (!empty($caja_seleccionada)) {
+    // Búsqueda por ID de caja específica (viene del formulario de esta página)
+    $busqueda_por_caja_completa = true;
+    $id_caja_busqueda = $caja_seleccionada;
+}
 
 // Función para ajustar hora -5 horas
 function horaAjustada($fecha_hora = null) {
@@ -70,14 +86,15 @@ try {
         $error = "Error de conexión a la base de datos.";
         error_log("Error SQL Server: " . print_r(sqlsrv_errors(), true));
     } else {
-        // NUEVO: Buscar información específica de la caja si se proporcionó
-        if (!empty($caja_seleccionada)) {
-            $sql_caja_especifica = "SELECT * 
-                                   FROM DPL.pruebas.MasterTable 
-                                   WHERE ID_Caja = ? AND LPN = ? AND Sede = ?";
+        // NUEVO: Lógica de búsqueda por caja completa (cliente + C + número)
+        if ($busqueda_por_caja_completa && !empty($id_caja_busqueda)) {
+            // Buscar información específica de la caja completa
+            $sql_caja_completa = "SELECT * 
+                                 FROM DPL.pruebas.MasterTable 
+                                 WHERE ID_Caja = ?";
             
-            $params_caja = array($caja_seleccionada, $lpn_original, $sede_original);
-            $stmt_caja = sqlsrv_prepare($conn, $sql_caja_especifica, $params_caja);
+            $params_caja = array($id_caja_busqueda);
+            $stmt_caja = sqlsrv_prepare($conn, $sql_caja_completa, $params_caja);
             
             if ($stmt_caja && sqlsrv_execute($stmt_caja)) {
                 if ($row = sqlsrv_fetch_array($stmt_caja, SQLSRV_FETCH_ASSOC)) {
@@ -90,54 +107,64 @@ try {
                         $row['FechaHora'] = $fecha_ajustada->format('d/m/Y H:i:s');
                     }
                     $caja_especifica = $row;
+                    
+                    // Establecer LPN y Sede desde la caja encontrada
+                    if (empty($lpn_original)) {
+                        $lpn_original = $row['LPN'];
+                    }
+                    if (empty($sede_original)) {
+                        $sede_original = $row['Sede'];
+                    }
                 }
             }
         }
         
-        // Obtener todas las cajas del LPN
-        $sql_cajas = "SELECT * 
-                     FROM DPL.pruebas.MasterTable 
-                     WHERE LPN = ? AND Sede = ?
-                     ORDER BY ID_Caja";
-        
-        $params_cajas = array($lpn_original, $sede_original);
-        $stmt_cajas = sqlsrv_prepare($conn, $sql_cajas, $params_cajas);
-        
-        if ($stmt_cajas && sqlsrv_execute($stmt_cajas)) {
-            while ($row = sqlsrv_fetch_array($stmt_cajas, SQLSRV_FETCH_ASSOC)) {
-                // Formatear fecha ajustando -5 horas
-                if ($row['FechaHora'] instanceof DateTime) {
-                    $fecha_ajustada = horaAjustada($row['FechaHora']);
-                    $row['FechaHora'] = $fecha_ajustada->format('d/m/Y H:i:s');
-                } else if (is_string($row['FechaHora'])) {
-                    $fecha_ajustada = horaAjustada($row['FechaHora']);
-                    $row['FechaHora'] = $fecha_ajustada->format('d/m/Y H:i:s');
-                }
-                $cajas[] = $row;
-            }
-            $total_cajas = count($cajas);
-        }
-        
-        // Obtener histórico del LPN
-        $sql_historico = "SELECT * 
-                         FROM DPL.pruebas.Historico 
+        // Obtener todas las cajas del LPN (si tenemos LPN)
+        if (!empty($lpn_original) && !empty($sede_original)) {
+            $sql_cajas = "SELECT * 
+                         FROM DPL.pruebas.MasterTable 
                          WHERE LPN = ? AND Sede = ?
-                         ORDER BY FechaHora DESC";
-        
-        $params_historico = array($lpn_original, $sede_original);
-        $stmt_historico = sqlsrv_prepare($conn, $sql_historico, $params_historico);
-        
-        if ($stmt_historico && sqlsrv_execute($stmt_historico)) {
-            while ($row = sqlsrv_fetch_array($stmt_historico, SQLSRV_FETCH_ASSOC)) {
-                // Formatear fecha ajustando -5 horas
-                if ($row['FechaHora'] instanceof DateTime) {
-                    $fecha_ajustada = horaAjustada($row['FechaHora']);
-                    $row['FechaHora'] = $fecha_ajustada->format('d/m/Y H:i:s');
-                } else if (is_string($row['FechaHora'])) {
-                    $fecha_ajustada = horaAjustada($row['FechaHora']);
-                    $row['FechaHora'] = $fecha_ajustada->format('d/m/Y H:i:s');
+                         ORDER BY ID_Caja";
+            
+            $params_cajas = array($lpn_original, $sede_original);
+            $stmt_cajas = sqlsrv_prepare($conn, $sql_cajas, $params_cajas);
+            
+            if ($stmt_cajas && sqlsrv_execute($stmt_cajas)) {
+                while ($row = sqlsrv_fetch_array($stmt_cajas, SQLSRV_FETCH_ASSOC)) {
+                    // Formatear fecha ajustando -5 horas
+                    if ($row['FechaHora'] instanceof DateTime) {
+                        $fecha_ajustada = horaAjustada($row['FechaHora']);
+                        $row['FechaHora'] = $fecha_ajustada->format('d/m/Y H:i:s');
+                    } else if (is_string($row['FechaHora'])) {
+                        $fecha_ajustada = horaAjustada($row['FechaHora']);
+                        $row['FechaHora'] = $fecha_ajustada->format('d/m/Y H:i:s');
+                    }
+                    $cajas[] = $row;
                 }
-                $historico[] = $row;
+                $total_cajas = count($cajas);
+            }
+            
+            // Obtener histórico del LPN
+            $sql_historico = "SELECT * 
+                             FROM DPL.pruebas.Historico 
+                             WHERE LPN = ? AND Sede = ?
+                             ORDER BY FechaHora DESC";
+            
+            $params_historico = array($lpn_original, $sede_original);
+            $stmt_historico = sqlsrv_prepare($conn, $sql_historico, $params_historico);
+            
+            if ($stmt_historico && sqlsrv_execute($stmt_historico)) {
+                while ($row = sqlsrv_fetch_array($stmt_historico, SQLSRV_FETCH_ASSOC)) {
+                    // Formatear fecha ajustando -5 horas
+                    if ($row['FechaHora'] instanceof DateTime) {
+                        $fecha_ajustada = horaAjustada($row['FechaHora']);
+                        $row['FechaHora'] = $fecha_ajustada->format('d/m/Y H:i:s');
+                    } else if (is_string($row['FechaHora'])) {
+                        $fecha_ajustada = horaAjustada($row['FechaHora']);
+                        $row['FechaHora'] = $fecha_ajustada->format('d/m/Y H:i:s');
+                    }
+                    $historico[] = $row;
+                }
             }
         }
         
@@ -151,36 +178,29 @@ try {
             $nuevo_lpn_grupal = isset($_POST['nuevo_lpn_grupal']) ? trim($_POST['nuevo_lpn_grupal']) : '';
             $nueva_ubicacion_grupal = isset($_POST['nueva_ubicacion_grupal']) ? trim($_POST['nueva_ubicacion_grupal']) : '';
             
-            // NUEVO: Procesar búsqueda por caja desde el formulario
-            if (isset($_POST['buscar_caja'])) {
-                $caja_buscar = isset($_POST['caja_buscar']) ? trim($_POST['caja_buscar']) : '';
+            // NUEVO: Procesar búsqueda por caja completa desde el formulario
+            if (isset($_POST['buscar_caja_completa'])) {
+                $caja_buscar = isset($_POST['caja_buscar_completa']) ? trim($_POST['caja_buscar_completa']) : '';
                 if (!empty($caja_buscar)) {
-                    // Redirigir con el parámetro de caja
-                    $url = "detalle_lpn.php?lpn=" . urlencode($lpn_original) . "&sede=" . urlencode($sede_original) . "&caja=" . urlencode($caja_buscar);
+                    // Redirigir con el parámetro de caja completa
+                    $url = "detalle_lpn.php?caja_completa=" . urlencode($caja_buscar);
                     header("Location: $url");
                     exit;
                 }
             }
             
             // NUEVO: Procesar modificación de caja específica
-            if (!empty($caja_seleccionada) && isset($_POST['modificar_caja_especifica'])) {
+            if (!empty($caja_especifica) && isset($_POST['modificar_caja_especifica'])) {
                 $nuevo_lpn_caja = isset($_POST['nuevo_lpn_caja']) ? trim($_POST['nuevo_lpn_caja']) : '';
                 $nueva_ubicacion_caja = isset($_POST['nueva_ubicacion_caja']) ? trim($_POST['nueva_ubicacion_caja']) : '';
                 
                 if (!empty($nuevo_lpn_caja) || !empty($nueva_ubicacion_caja)) {
-                    // Buscar la caja original
-                    $caja_original = null;
-                    foreach ($cajas as $c) {
-                        if ($c['ID_Caja'] == $caja_seleccionada) {
-                            $caja_original = $c;
-                            break;
-                        }
-                    }
+                    $caja_original = $caja_especifica;
                     
                     if ($caja_original) {
                         $sql_update_caja = "UPDATE DPL.pruebas.MasterTable 
                                            SET LPN = ?, Ubicacion = ?, Usuario = ?, FechaHora = ?
-                                           WHERE ID_Caja = ? AND LPN = ? AND Sede = ?";
+                                           WHERE ID_Caja = ?";
                         
                         $fecha_actual = date('Y-m-d H:i:s', strtotime('-5 hours'));
                         $params_update_caja = array(
@@ -188,9 +208,7 @@ try {
                             !empty($nueva_ubicacion_caja) ? $nueva_ubicacion_caja : $caja_original['Ubicacion'],
                             $usuario_actual,
                             $fecha_actual,
-                            $caja_seleccionada,
-                            $lpn_original,
-                            $sede_original
+                            $caja_original['ID_Caja']
                         );
                         
                         $stmt_update_caja = sqlsrv_prepare($conn, $sql_update_caja, $params_update_caja);
@@ -199,7 +217,7 @@ try {
                             $modificaciones_realizadas++;
                             
                             // Crear mensaje para histórico
-                            $accion_caja = "MODIFICACIÓN DE CAJA ESPECÍFICA: Caja $caja_seleccionada ";
+                            $accion_caja = "MODIFICACIÓN DE CAJA ESPECÍFICA: Caja {$caja_original['ID_Caja']} ";
                             $cambios_caja = [];
                             
                             if (!empty($nuevo_lpn_caja) && $nuevo_lpn_caja != $caja_original['LPN']) {
@@ -224,13 +242,13 @@ try {
                                 $fecha_actual,
                                 $usuario_actual,
                                 $accion_caja,
-                                $sede_original
+                                $caja_original['Sede']
                             );
                             
                             sqlsrv_prepare($conn, $sql_hist_caja, $params_hist_caja);
                             sqlsrv_execute(sqlsrv_prepare($conn, $sql_hist_caja, $params_hist_caja));
                             
-                            $mensaje = "✅ Caja $caja_seleccionada modificada correctamente.";
+                            $mensaje = "✅ Caja {$caja_original['ID_Caja']} modificada correctamente.";
                             if (!empty($nuevo_lpn_caja) && $nuevo_lpn_caja != $lpn_original) {
                                 $lpn_original = $nuevo_lpn_caja;
                             }
@@ -246,7 +264,7 @@ try {
             }
             
             // Procesar modificaciones grupales
-            if ($modificacion_grupal && empty($caja_seleccionada)) {
+            if ($modificacion_grupal && empty($caja_especifica)) {
                 $cajas_modificadas = [];
                 
                 // Preparar los nuevos valores
@@ -386,7 +404,7 @@ try {
                                     $fecha_actual,
                                     $usuario_actual,
                                     $accion_individual,
-                                    $sede_original
+                                    $caja_original['Sede']
                                 );
                                 
                                 sqlsrv_prepare($conn, $sql_hist_ind, $params_hist_ind);
@@ -409,8 +427,8 @@ try {
                 sqlsrv_commit($conn);
                 // Recargar datos actualizados
                 $url = "detalle_lpn.php?lpn=" . urlencode($lpn_original) . "&sede=" . urlencode($sede_original);
-                if (!empty($caja_seleccionada)) {
-                    $url .= "&caja=" . urlencode($caja_seleccionada);
+                if (!empty($caja_especifica)) {
+                    $url .= "&caja_completa=" . urlencode($caja_especifica['ID_Caja']);
                 }
                 if (!empty($mensaje)) {
                     $url .= "&msg=" . urlencode($mensaje);
@@ -494,7 +512,7 @@ if (isset($_GET['msg'])) {
             margin-top: 8px;
         }
         
-        /* NUEVO: Panel de búsqueda por caja */
+        /* NUEVO: Panel de búsqueda por caja COMPLETA */
         .search-caja-panel {
             background: white;
             border-radius: 10px;
@@ -524,7 +542,22 @@ if (isset($_GET['msg'])) {
             flex: 1;
         }
         
-        /* NUEVO: Fila de caja seleccionada */
+        /* NUEVO: Información de búsqueda desde translado.php */
+        .busqueda-origen {
+            background: #e9f7ef;
+            border: 1px solid #b8e6c9;
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin-bottom: 10px;
+            font-size: 11px;
+            color: #0d4620;
+        }
+        
+        .busqueda-origen strong {
+            color: #009a3f;
+        }
+        
+        /* NUEVO: Fila de caja seleccionada - MEJORADA */
         .caja-seleccionada-row {
             background: linear-gradient(135deg, #ffe6e6, #ffcccc);
             border: 2px solid #dc3545;
@@ -592,6 +625,7 @@ if (isset($_GET['msg'])) {
             box-shadow: 0 0 0 2px rgba(0, 154, 63, 0.1);
         }
         
+        /* Botones */
         .btn-detalle {
             background: linear-gradient(135deg, #009a3f, #00782f);
             color: white;
@@ -833,128 +867,7 @@ if (isset($_GET['msg'])) {
             color: #212529;
         }
         
-        /* Historico específico */
-        .historico-table th {
-            background: linear-gradient(135deg, rgba(23, 162, 184, 0.9), rgba(23, 162, 184, 0.7));
-            color: white;
-        }
-        
-        .historico-table tr:hover {
-            background-color: #f0f8ff;
-        }
-        
-        .accion-cell {
-            max-width: 300px;
-            word-wrap: break-word;
-        }
-        
-        /* Botones de acción */
-        .btn-action {
-            padding: 4px 8px;
-            font-size: 11px;
-            border-radius: 3px;
-            border: none;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: inline-flex;
-            align-items: center;
-            gap: 3px;
-        }
-        
-        .btn-edit {
-            background: #17a2b8;
-            color: white;
-        }
-        
-        .btn-edit:hover {
-            background: #138496;
-            transform: translateY(-1px);
-        }
-        
-        .btn-save {
-            background: #28a745;
-            color: white;
-        }
-        
-        .btn-save:hover {
-            background: #218838;
-            transform: translateY(-1px);
-        }
-        
-        .btn-cancel {
-            background: #6c757d;
-            color: white;
-        }
-        
-        .btn-cancel:hover {
-            background: #5a6268;
-            transform: translateY(-1px);
-        }
-        
-        /* Tabs */
-        .nav-tabs {
-            border-bottom: 2px solid #dee2e6;
-            margin-bottom: 15px;
-        }
-        
-        .nav-tabs .nav-link {
-            border: none;
-            color: #666;
-            font-weight: 600;
-            font-size: 12px;
-            padding: 8px 15px;
-            border-radius: 5px 5px 0 0;
-        }
-        
-        .nav-tabs .nav-link.active {
-            color: #009a3f;
-            background-color: #fff;
-            border-bottom: 2px solid #009a3f;
-        }
-        
-        .nav-tabs .nav-link:hover {
-            color: #009a3f;
-            border-color: transparent;
-        }
-        
-        /* Instrucciones */
-        .instructions {
-            background: #f0f8ff;
-            border-left: 3px solid #009a3f;
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-size: 11px;
-            margin-top: 10px;
-        }
-        
-        .instructions h5 {
-            color: #009a3f;
-            margin-bottom: 4px;
-            font-size: 11px;
-            font-weight: 600;
-        }
-        
-        .instructions ul {
-            padding-left: 15px;
-            margin-bottom: 0;
-        }
-        
-        .instructions li {
-            margin-bottom: 2px;
-            line-height: 1.3;
-        }
-        
-        /* Footer específico */
-        .footer-detalle {
-            margin-top: 15px;
-            padding: 12px;
-            background: rgba(0, 154, 63, 0.05);
-            border-radius: 6px;
-            font-size: 10px;
-            border-top: 1px solid #e0e0e0;
-        }
-        
-        /* Responsive ESPECÍFICO para la tabla (NO afecta el menú) */
+        /* Responsive */
         @media (max-width: 768px) {
             .welcome-title {
                 font-size: 1.2rem;
@@ -977,25 +890,12 @@ if (isset($_GET['msg'])) {
             
             .cajas-table, .historico-table {
                 font-size: 11px;
-                min-width: 700px; /* Para scroll horizontal en móviles */
+                min-width: 700px;
             }
             
             .cajas-table th,
-            .cajas-table td,
-            .historico-table th,
-            .historico-table td {
+            .cajas-table td {
                 padding: 6px 4px;
-            }
-            
-            .btn-detalle, .btn-danger-detalle, .btn-warning-detalle, .btn-secondary-detalle {
-                width: 100%;
-                justify-content: center;
-                margin-bottom: 5px;
-            }
-            
-            .cajas-container, .historico-container {
-                overflow-x: auto;
-                -webkit-overflow-scrolling: touch;
             }
         }
     </style>
@@ -1004,7 +904,7 @@ if (isset($_GET['msg'])) {
 <body class="nav-md">
     <div class="container body">
         <div class="main_container">
-            <!-- SIDEBAR EXACTAMENTE IGUAL QUE ransa_main.php -->
+            <!-- SIDEBAR -->
             <div class="col-md-3 left_col">
                 <div class="left_col scroll-view">
                     <div class="navbar nav_title" style="border: 0;">
@@ -1026,7 +926,7 @@ if (isset($_GET['msg'])) {
 
                     <br />
 
-                    <!-- MENU EXACTAMENTE IGUAL -->
+                    <!-- MENU -->
                     <div id="sidebar-menu" class="main_menu_side hidden-print main_menu">
                         <div class="menu_section">
                             <h3>Navegación</h3>
@@ -1041,13 +941,13 @@ if (isset($_GET['msg'])) {
                                     <a href="translado.php"><i class="fa fa-refresh"></i> Traslado</a>
                                 </li>
                                 <li class="active">
-                                    <a href="detalle_lpn.php?lpn=<?php echo urlencode($lpn_original); ?>&sede=<?php echo urlencode($sede_original); ?><?php echo !empty($caja_seleccionada) ? '&caja=' . urlencode($caja_seleccionada) : ''; ?>"><i class="fa fa-eye"></i> Detalle LPN</a>
+                                    <a href="detalle_lpn.php"><i class="fa fa-eye"></i> Detalle LPN</a>
                                 </li>
                             </ul>
                         </div>
                     </div>
                     
-                    <!-- FOOTER EXACTAMENTE IGUAL -->
+                    <!-- FOOTER -->
                     <div class="sidebar-footer hidden-small">
                         <a title="Volver" data-toggle="tooltip" data-placement="top" onclick="window.history.back()">
                             <span class="glyphicon glyphicon-arrow-left"></span>
@@ -1062,7 +962,7 @@ if (isset($_GET['msg'])) {
                 </div>
             </div>
 
-            <!-- NAVBAR SUPERIOR EXACTAMENTE IGUAL -->
+            <!-- NAVBAR SUPERIOR -->
             <div class="top_nav">
                 <div class="nav_menu">
                     <div class="nav toggle">
@@ -1081,35 +981,53 @@ if (isset($_GET['msg'])) {
                 </div>
             </div>
 
-            <!-- CONTENIDO PRINCIPAL CON CLASES DEL TEMPLATE -->
+            <!-- CONTENIDO PRINCIPAL -->
             <div class="right_col" role="main">
-                <div class="page-title">
-                    
-                </div>
+                <div class="page-title"></div>
                 
                 <div class="clearfix"></div>
                 
                 <div class="row">
                     <div class="col-md-12 col-sm-12">
                         <div class="x_panel">
-                            
                             <div class="x_content">
                                 <!-- Sección de Bienvenida -->
                                 <div class="welcome-section">
                                     <div class="welcome-title">
-                                        <span><i class="fa fa-cube"></i> Detalle del Pallet</span>
+                                        <span><i class="fa fa-cube"></i> 
+                                            <?php if ($busqueda_por_caja_completa): ?>
+                                                Detalle de Caja Específica
+                                            <?php else: ?>
+                                                Detalle del Pallet (LPN)
+                                            <?php endif; ?>
+                                        </span>
                                         <div class="lpn-info">
-                                            <i class="fa fa-barcode"></i> LPN: <strong><?php echo htmlspecialchars($lpn_original); ?></strong>
-                                            <i class="fa fa-map-marker"></i> Sede: <strong><?php echo htmlspecialchars($sede_original); ?></strong>
-                                            <i class="fa fa-cubes"></i> Cajas: <strong><?php echo $total_cajas; ?></strong>
-                                            <?php if (!empty($caja_seleccionada)): ?>
+                                            <?php if (!empty($lpn_original)): ?>
+                                                <i class="fa fa-barcode"></i> LPN: <strong><?php echo htmlspecialchars($lpn_original); ?></strong>
+                                                <i class="fa fa-map-marker"></i> Sede: <strong><?php echo htmlspecialchars($sede_original); ?></strong>
+                                                <i class="fa fa-cubes"></i> Cajas: <strong><?php echo $total_cajas; ?></strong>
+                                            <?php endif; ?>
+                                            
+                                            <?php if (!empty($caja_especifica)): ?>
                                                 <span class="badge-caja-especifica">
-                                                    <i class="fa fa-box"></i> Caja: <?php echo htmlspecialchars($caja_seleccionada); ?>
+                                                    <i class="fa fa-box"></i> Caja: <?php echo htmlspecialchars($caja_especifica['ID_Caja']); ?>
                                                 </span>
                                             <?php endif; ?>
                                         </div>
                                     </div>
                                 </div>
+
+                                <!-- NUEVO: Información de búsqueda desde translado.php -->
+                                <?php if (!empty($caja_completa)): ?>
+                                    <div class="busqueda-origen">
+                                        <i class="fa fa-info-circle"></i>
+                                        <strong>Búsqueda desde translado.php:</strong> 
+                                        Mostrando detalles de la caja <strong><?php echo htmlspecialchars($caja_completa); ?></strong>
+                                        <?php if (!empty($lpn_original)): ?>
+                                            que pertenece al LPN <strong><?php echo htmlspecialchars($lpn_original); ?></strong>
+                                        <?php endif; ?>
+                                    </div>
+                                <?php endif; ?>
 
                                 <!-- Mensajes -->
                                 <?php if (!empty($mensaje)): ?>
@@ -1124,31 +1042,36 @@ if (isset($_GET['msg'])) {
                                     </div>
                                 <?php endif; ?>
 
-                                <!-- NUEVO: Panel de Búsqueda por Caja -->
+                                <!-- NUEVO: Panel de Búsqueda por Caja COMPLETA -->
                                 <div class="search-caja-panel">
                                     <div class="search-caja-title">
-                                        <i class="fa fa-search"></i> Buscar Caja Específica en este LPN
+                                        <i class="fa fa-search"></i> Buscar Caja por ID Completo
                                     </div>
-                                    <form method="POST" class="search-caja-form">
+                                    <form method="POST" class="search-caja-form" id="formBuscarCaja">
                                         <div class="search-caja-input">
                                             <label style="font-size: 11px; font-weight: 600; color: #555; margin-bottom: 4px; display: block;">
-                                                Ingrese ID de Caja:
+                                                Ingrese ID Completo de Caja (Cliente + C + Número):
                                             </label>
                                             <input type="text" 
-                                                   name="caja_buscar" 
+                                                   name="caja_buscar_completa" 
+                                                   id="inputCajaCompleta"
                                                    class="form-control" 
-                                                   placeholder="Ej: CAJA-001"
-                                                   value="<?php echo htmlspecialchars($caja_seleccionada); ?>"
-                                                   autocomplete="off">
+                                                   placeholder="Ej: 0000123C0000001850"
+                                                   value="<?php echo htmlspecialchars($id_caja_busqueda); ?>"
+                                                   autocomplete="off"
+                                                   required>
+                                            <small style="color: #666; font-size: 10px; margin-top: 3px; display: block;">
+                                                Formato: <code>0000123C0000001850</code> donde <code>0000123</code> = Cliente, <code>C</code> = Separador, <code>0000001850</code> = N° Caja
+                                            </small>
                                         </div>
                                         <div>
-                                            <button type="submit" class="btn-danger-detalle" name="buscar_caja" value="1">
+                                            <button type="submit" class="btn-danger-detalle" name="buscar_caja_completa" value="1">
                                                 <i class="fa fa-search"></i> Buscar Caja
                                             </button>
-                                            <?php if (!empty($caja_seleccionada)): ?>
-                                                <a href="detalle_lpn.php?lpn=<?php echo urlencode($lpn_original); ?>&sede=<?php echo urlencode($sede_original); ?>" 
+                                            <?php if (!empty($id_caja_busqueda)): ?>
+                                                <a href="detalle_lpn.php" 
                                                    class="btn-secondary-detalle" style="margin-left: 5px;">
-                                                    <i class="fa fa-times"></i> Limpiar
+                                                    <i class="fa fa-times"></i> Nueva Búsqueda
                                                 </a>
                                             <?php endif; ?>
                                         </div>
@@ -1156,11 +1079,13 @@ if (isset($_GET['msg'])) {
                                 </div>
 
                                 <!-- NUEVO: Fila de Caja Seleccionada (si existe) -->
-                                <?php if (!empty($caja_seleccionada) && !empty($caja_especifica)): ?>
+                                <?php if (!empty($caja_especifica)): ?>
                                     <div class="caja-seleccionada-row">
                                         <div class="caja-seleccionada-item">
                                             <div class="caja-seleccionada-label">ID de Caja</div>
-                                            <div class="caja-seleccionada-value"><?php echo htmlspecialchars($caja_especifica['ID_Caja']); ?></div>
+                                            <div class="caja-seleccionada-value">
+                                                <code><?php echo htmlspecialchars($caja_especifica['ID_Caja']); ?></code>
+                                            </div>
                                         </div>
                                         <div class="caja-seleccionada-item">
                                             <div class="caja-seleccionada-label">LPN</div>
@@ -1188,7 +1113,7 @@ if (isset($_GET['msg'])) {
                                         </div>
                                     </div>
                                     
-                                    <!-- NUEVO: Formulario para modificar solo esta caja -->
+                                    <!-- Formulario para modificar solo esta caja -->
                                     <div class="group-edit-panel" style="border-color: #dc3545;">
                                         <div class="group-edit-title">
                                             <i class="fa fa-edit"></i> Modificar Solo Esta Caja
@@ -1218,24 +1143,25 @@ if (isset($_GET['msg'])) {
                                                         <i class="fa fa-edit"></i> Modificar Solo Esta Caja
                                                     </button>
                                                     <small style="display: block; color: #666; margin-top: 5px; font-size: 10px;">
-                                                        Solo afectará a la caja <?php echo htmlspecialchars($caja_seleccionada); ?>
+                                                        Solo afectará a la caja <?php echo htmlspecialchars($caja_especifica['ID_Caja']); ?>
                                                     </small>
                                                 </div>
                                             </div>
                                         </form>
                                     </div>
-                                <?php elseif (!empty($caja_seleccionada)): ?>
+                                <?php elseif ($busqueda_por_caja_completa && empty($caja_especifica)): ?>
                                     <div class="alert-detalle alert-warning-detalle">
                                         <i class="fa fa-exclamation-triangle"></i> 
-                                        No se encontró la caja "<?php echo htmlspecialchars($caja_seleccionada); ?>" en este LPN.
+                                        No se encontró la caja "<?php echo htmlspecialchars($id_caja_busqueda); ?>" en la base de datos.
+                                        <br><small>Verifique que el ID de caja sea correcto.</small>
                                     </div>
                                 <?php endif; ?>
 
-                                <!-- Panel de Modificación Grupal (solo si no hay caja específica seleccionada) -->
-                                <?php if (empty($caja_seleccionada)): ?>
+                                <!-- Solo mostrar modificaciones grupales si NO hay caja específica seleccionada -->
+                                <?php if (empty($caja_especifica) && !empty($lpn_original) && $total_cajas > 0): ?>
                                 <div class="group-edit-panel">
                                     <div class="group-edit-title">
-                                        <i class="fa fa-users"></i> Modificación Masiva de Todas las Cajas
+                                        <i class="fa fa-users"></i> Modificación Masiva de Todas las Cajas del LPN
                                     </div>
                                     <form method="POST" id="formGrupal" onsubmit="return confirm('¿Está seguro de aplicar estos cambios a TODAS las <?php echo $total_cajas; ?> cajas?')">
                                         <div class="group-edit-form">
@@ -1262,7 +1188,7 @@ if (isset($_GET['msg'])) {
                                                     <i class="fa fa-edit"></i> Aplicar a Todas las Cajas
                                                 </button>
                                                 <small style="display: block; color: #666; margin-top: 5px; font-size: 10px;">
-                                                    Afectará a <?php echo $total_cajas; ?> cajas
+                                                    Afectará a <?php echo $total_cajas; ?> cajas del LPN <?php echo htmlspecialchars($lpn_original); ?>
                                                 </small>
                                             </div>
                                         </div>
@@ -1270,12 +1196,13 @@ if (isset($_GET['msg'])) {
                                 </div>
                                 <?php endif; ?>
 
-                                <!-- Tabs para Cajas e Histórico -->
+                                <!-- Tabs para Cajas e Histórico (solo si hay LPN) -->
+                                <?php if (!empty($lpn_original) && $total_cajas > 0): ?>
                                 <ul class="nav nav-tabs" id="detalleTabs" role="tablist">
                                     <li class="nav-item">
                                         <a class="nav-link active" id="cajas-tab" data-toggle="tab" href="#cajas" role="tab">
-                                            <i class="fa fa-cubes"></i> Cajas (<?php echo $total_cajas; ?>)
-                                            <?php if (!empty($caja_seleccionada)): ?>
+                                            <i class="fa fa-cubes"></i> Cajas del LPN (<?php echo $total_cajas; ?>)
+                                            <?php if (!empty($caja_especifica)): ?>
                                                 <span class="badge-caja-especifica" style="margin-left: 5px;">
                                                     <i class="fa fa-box"></i> 1 seleccionada
                                                 </span>
@@ -1301,99 +1228,91 @@ if (isset($_GET['msg'])) {
                                                     </span>
                                                 </div>
                                                 
-                                                <?php if ($total_cajas > 0): ?>
-                                                    <table class="cajas-table">
-                                                        <thead>
-                                                            <tr>
-                                                                <th width="5%">#</th>
-                                                                <th width="15%">ID Caja</th>
-                                                                <th width="15%">LPN</th>
-                                                                <th width="15%">Ubicación</th>
-                                                                <th width="15%">Usuario</th>
-                                                                <th width="15%">Fecha/Hora</th>
-                                                                <th width="10%">Sede</th>
-                                                                <th width="10%">Acciones</th>
+                                                <table class="cajas-table">
+                                                    <thead>
+                                                        <tr>
+                                                            <th width="5%">#</th>
+                                                            <th width="15%">ID Caja</th>
+                                                            <th width="15%">LPN</th>
+                                                            <th width="15%">Ubicación</th>
+                                                            <th width="15%">Usuario</th>
+                                                            <th width="15%">Fecha/Hora</th>
+                                                            <th width="10%">Sede</th>
+                                                            <th width="10%">Acciones</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        <?php foreach ($cajas as $index => $caja): ?>
+                                                            <tr class="<?php echo (!empty($caja_especifica) && $caja['ID_Caja'] == $caja_especifica['ID_Caja']) ? 'caja-seleccionada-tabla' : ''; ?>">
+                                                                <td>
+                                                                    <?php echo $index + 1; ?>
+                                                                    <?php if (!empty($caja_especifica) && $caja['ID_Caja'] == $caja_especifica['ID_Caja']): ?>
+                                                                        <span style="color: #dc3545; margin-left: 3px;">★</span>
+                                                                    <?php endif; ?>
+                                                                </td>
+                                                                <td>
+                                                                    <?php echo htmlspecialchars($caja['ID_Caja']); ?>
+                                                                    <input type="hidden" name="id_caja[]" value="<?php echo htmlspecialchars($caja['ID_Caja']); ?>">
+                                                                </td>
+                                                                <td>
+                                                                    <input type="text" 
+                                                                           name="lpn[]" 
+                                                                           class="table-input" 
+                                                                           value="<?php echo htmlspecialchars($caja['LPN']); ?>"
+                                                                           placeholder="Nuevo LPN">
+                                                                </td>
+                                                                <td>
+                                                                    <input type="text" 
+                                                                           name="ubicacion[]" 
+                                                                           class="table-input" 
+                                                                           value="<?php echo htmlspecialchars($caja['Ubicacion']); ?>"
+                                                                           placeholder="Nueva ubicación">
+                                                                </td>
+                                                                <td>
+                                                                    <input type="text" 
+                                                                           class="table-input readonly" 
+                                                                           value="<?php echo htmlspecialchars($caja['Usuario']); ?>" 
+                                                                           readonly>
+                                                                </td>
+                                                                <td>
+                                                                    <input type="text" 
+                                                                           class="table-input readonly" 
+                                                                           value="<?php echo htmlspecialchars($caja['FechaHora']); ?>" 
+                                                                           readonly>
+                                                                </td>
+                                                                <td style="text-align: center;">
+                                                                    <span class="badge-sede badge-<?php echo strtolower($caja['Sede']); ?>">
+                                                                        <?php echo htmlspecialchars($caja['Sede']); ?>
+                                                                    </span>
+                                                                </td>
+                                                                <td style="text-align: center;">
+                                                                    <button type="button" class="btn-action btn-edit" onclick="activarEdicion(this)">
+                                                                        <i class="fa fa-edit"></i> Editar
+                                                                    </button>
+                                                                    <?php if (!empty($caja_especifica) && $caja['ID_Caja'] == $caja_especifica['ID_Caja']): ?>
+                                                                        <br>
+                                                                        <small style="color: #dc3545; font-size: 9px;">
+                                                                            <i class="fa fa-search"></i> Búsqueda actual
+                                                                        </small>
+                                                                    <?php endif; ?>
+                                                                </td>
                                                             </tr>
-                                                        </thead>
-                                                        <tbody>
-                                                            <?php foreach ($cajas as $index => $caja): ?>
-                                                                <tr class="<?php echo (!empty($caja_seleccionada) && $caja['ID_Caja'] == $caja_seleccionada) ? 'caja-seleccionada-tabla' : ''; ?>">
-                                                                    <td>
-                                                                        <?php echo $index + 1; ?>
-                                                                        <?php if (!empty($caja_seleccionada) && $caja['ID_Caja'] == $caja_seleccionada): ?>
-                                                                            <span style="color: #dc3545; margin-left: 3px;">★</span>
-                                                                        <?php endif; ?>
-                                                                    </td>
-                                                                    <td>
-                                                                        <?php echo htmlspecialchars($caja['ID_Caja']); ?>
-                                                                        <input type="hidden" name="id_caja[]" value="<?php echo htmlspecialchars($caja['ID_Caja']); ?>">
-                                                                    </td>
-                                                                    <td>
-                                                                        <input type="text" 
-                                                                               name="lpn[]" 
-                                                                               class="table-input" 
-                                                                               value="<?php echo htmlspecialchars($caja['LPN']); ?>"
-                                                                               placeholder="Nuevo LPN">
-                                                                    </td>
-                                                                    <td>
-                                                                        <input type="text" 
-                                                                               name="ubicacion[]" 
-                                                                               class="table-input" 
-                                                                               value="<?php echo htmlspecialchars($caja['Ubicacion']); ?>"
-                                                                               placeholder="Nueva ubicación">
-                                                                    </td>
-                                                                    <td>
-                                                                        <input type="text" 
-                                                                               class="table-input readonly" 
-                                                                               value="<?php echo htmlspecialchars($caja['Usuario']); ?>" 
-                                                                               readonly>
-                                                                    </td>
-                                                                    <td>
-                                                                        <input type="text" 
-                                                                               class="table-input readonly" 
-                                                                               value="<?php echo htmlspecialchars($caja['FechaHora']); ?>" 
-                                                                               readonly>
-                                                                    </td>
-                                                                    <td style="text-align: center;">
-                                                                        <span class="badge-sede badge-<?php echo strtolower($caja['Sede']); ?>">
-                                                                            <?php echo htmlspecialchars($caja['Sede']); ?>
-                                                                        </span>
-                                                                    </td>
-                                                                    <td style="text-align: center;">
-                                                                        <button type="button" class="btn-action btn-edit" onclick="activarEdicion(this)">
-                                                                            <i class="fa fa-edit"></i> Editar
-                                                                        </button>
-                                                                        <?php if (!empty($caja_seleccionada) && $caja['ID_Caja'] == $caja_seleccionada): ?>
-                                                                            <br>
-                                                                            <small style="color: #dc3545; font-size: 9px;">
-                                                                                <i class="fa fa-search"></i> Búsqueda actual
-                                                                            </small>
-                                                                        <?php endif; ?>
-                                                                    </td>
-                                                                </tr>
-                                                            <?php endforeach; ?>
-                                                        </tbody>
-                                                    </table>
-                                                    
-                                                    <!-- Botones de acción -->
-                                                    <div style="margin-top: 15px; text-align: center;">
-                                                        <button type="submit" class="btn-detalle" name="accion_individual" value="guardar">
-                                                            <i class="fa fa-save"></i> Guardar Cambios Individuales
-                                                        </button>
-                                                        <button type="button" class="btn-secondary-detalle" onclick="limpiarEdiciones()">
-                                                            <i class="fa fa-times"></i> Limpiar Cambios
-                                                        </button>
-                                                        <button type="button" class="btn-secondary-detalle" onclick="window.history.back()">
-                                                            <i class="fa fa-arrow-left"></i> Volver al Listado
-                                                        </button>
-                                                    </div>
-                                                    
-                                                <?php else: ?>
-                                                    <div class="alert-detalle alert-warning-detalle">
-                                                        <i class="fa fa-exclamation-triangle"></i> 
-                                                        No se encontraron cajas para este LPN en la sede seleccionada.
-                                                    </div>
-                                                <?php endif; ?>
+                                                        <?php endforeach; ?>
+                                                    </tbody>
+                                                </table>
+                                                
+                                                <!-- Botones de acción -->
+                                                <div style="margin-top: 15px; text-align: center;">
+                                                    <button type="submit" class="btn-detalle" name="accion_individual" value="guardar">
+                                                        <i class="fa fa-save"></i> Guardar Cambios Individuales
+                                                    </button>
+                                                    <button type="button" class="btn-secondary-detalle" onclick="limpiarEdiciones()">
+                                                        <i class="fa fa-times"></i> Limpiar Cambios
+                                                    </button>
+                                                    <a href="translado.php" class="btn-secondary-detalle">
+                                                        <i class="fa fa-arrow-left"></i> Volver a Traslado
+                                                    </a>
+                                                </div>
                                             </div>
                                         </form>
                                     </div>
@@ -1473,23 +1392,25 @@ if (isset($_GET['msg'])) {
                                         </div>
                                     </div>
                                 </div>
+                                <?php elseif (empty($caja_especifica)): ?>
+                                    <div class="alert-detalle alert-info-detalle">
+                                        <i class="fa fa-info-circle"></i> 
+                                        Realice una búsqueda por ID de caja para ver los detalles.
+                                        <br><small>Use el campo de búsqueda superior para ingresar un ID de caja completo.</small>
+                                    </div>
+                                <?php endif; ?>
 
                                 <!-- Instrucciones -->
                                 <div class="instructions">
                                     <h5><i class="fa fa-lightbulb-o"></i> Instrucciones de Uso:</h5>
                                     <ul>
-                                        <?php if (!empty($caja_seleccionada)): ?>
-                                            <li><strong>Caja Específica:</strong> Está visualizando/modificando solo la caja <strong><?php echo htmlspecialchars($caja_seleccionada); ?></strong></li>
-                                            <li><strong>Modificación Individual:</strong> Los cambios solo afectarán a esta caja específica</li>
-                                        <?php else: ?>
-                                            <li><strong>Modificación Grupal:</strong> Cambia LPN/Ubicación de TODAS las cajas del pallet</li>
-                                        <?php endif; ?>
-                                        <li><strong>Modificación Individual:</strong> Edite cada caja por separado usando los campos</li>
-                                        <li><strong>LPN:</strong> Si cambia el LPN, el pallet se "traslada" a otro código</li>
-                                        <li><strong>Ubicación:</strong> Cambia la ubicación física del pallet/caja</li>
+                                        <li><strong>Búsqueda por ID de Caja:</strong> Ingrese el ID completo (ej: 0000123C0000001850) en el campo superior</li>
+                                        <li><strong>Desde translado.php:</strong> Al hacer clic en "Ver Detalle", se mostrará la caja específica aquí</li>
+                                        <li><strong>Caja Específica:</strong> Modifique solo esa caja sin afectar otras</li>
+                                        <li><strong>Modificación Grupal:</strong> Solo disponible cuando se visualiza un LPN completo</li>
+                                        <li><strong>Ctrl+F:</strong> Para enfocar en el campo de búsqueda de caja</li>
                                         <li><strong>Ctrl+S:</strong> Guarda cambios individuales</li>
-                                        <li><strong>Ctrl+G:</strong> Va al formulario grupal</li>
-                                        <li><strong>Esc:</strong> Cancela la edición actual</li>
+                                        <li><strong>Ctrl+G:</strong> Va al formulario grupal (si está disponible)</li>
                                     </ul>
                                 </div>
                             </div>
@@ -1498,7 +1419,7 @@ if (isset($_GET['msg'])) {
                 </div>
             </div>
 
-            <!-- FOOTER CON CLASES ESPECÍFICAS -->
+            <!-- FOOTER -->
             <footer class="footer-detalle">
                 <div class="pull-right">
                     <i class="fa fa-calendar"></i> 
@@ -1509,7 +1430,7 @@ if (isset($_GET['msg'])) {
         </div>
     </div>
 
-    <!-- SCRIPTS EXACTAMENTE IGUALES QUE ransa_main.php -->
+    <!-- SCRIPTS -->
     <script src="vendors/jquery/dist/jquery.min.js"></script>
     <script src="vendors/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
     <script src="vendors/fastclick/lib/fastclick.js"></script>
@@ -1543,14 +1464,12 @@ if (isset($_GET['msg'])) {
             const fila = boton.closest('tr');
             const inputs = fila.querySelectorAll('input[type="text"]:not(.readonly)');
             
-            // Activar todos los inputs editables
             inputs.forEach(input => {
                 input.style.backgroundColor = '#fff8e1';
                 input.style.borderColor = '#009a3f';
                 input.focus();
             });
             
-            // Cambiar botón a "Guardar"
             boton.innerHTML = '<i class="fa fa-save"></i> Guardar';
             boton.className = 'btn-action btn-save';
             boton.onclick = function() { guardarEdicion(this); };
@@ -1563,20 +1482,17 @@ if (isset($_GET['msg'])) {
             const fila = boton.closest('tr');
             const inputs = fila.querySelectorAll('input[type="text"]:not(.readonly)');
             
-            // Restaurar estilo normal
             inputs.forEach(input => {
                 input.style.backgroundColor = '';
                 input.style.borderColor = '#ddd';
             });
             
-            // Cambiar botón a "Editar"
             boton.innerHTML = '<i class="fa fa-edit"></i> Editar';
             boton.className = 'btn-action btn-edit';
             boton.onclick = function() { activarEdicion(this); };
             
             fila.classList.remove('editing');
             
-            // Mostrar mensaje de confirmación
             const idCaja = fila.querySelector('input[name="id_caja[]"]').value;
             alert(`Cambios para la caja ${idCaja} listos para guardar. Presione "Guardar Cambios Individuales" al final.`);
         }
@@ -1637,61 +1553,70 @@ if (isset($_GET['msg'])) {
 
         // Atajos de teclado
         document.addEventListener('keydown', function(event) {
+            // Ctrl+F para enfocar en búsqueda de caja
+            if (event.ctrlKey && event.key === 'f') {
+                event.preventDefault();
+                const searchInput = document.getElementById('inputCajaCompleta');
+                if (searchInput) {
+                    searchInput.focus();
+                    searchInput.select();
+                }
+            }
+            
             // Ctrl+S para guardar cambios individuales
             if (event.ctrlKey && event.key === 's') {
                 event.preventDefault();
-                document.getElementById('formIndividual').submit();
+                const formIndividual = document.getElementById('formIndividual');
+                if (formIndividual) {
+                    formIndividual.submit();
+                }
             }
             
-            // Ctrl+G para ir a modificación grupal (solo si no hay caja específica)
-            <?php if (empty($caja_seleccionada)): ?>
+            // Ctrl+G para ir a modificación grupal
+            <?php if (empty($caja_especifica) && !empty($lpn_original)): ?>
             if (event.ctrlKey && event.key === 'g') {
                 event.preventDefault();
-                document.querySelector('input[name="nuevo_lpn_grupal"]').focus();
+                const inputGrupal = document.querySelector('input[name="nuevo_lpn_grupal"]');
+                if (inputGrupal) {
+                    inputGrupal.focus();
+                    inputGrupal.select();
+                }
             }
             <?php endif; ?>
             
-            // Ctrl+B para buscar caja
-            if (event.ctrlKey && event.key === 'b') {
+            // Enter en campo de búsqueda para buscar
+            const inputBusqueda = document.getElementById('inputCajaCompleta');
+            if (inputBusqueda && document.activeElement === inputBusqueda && event.key === 'Enter') {
                 event.preventDefault();
-                const cajaInput = document.querySelector('input[name="caja_buscar"]');
-                if (cajaInput) {
-                    cajaInput.focus();
-                    cajaInput.select();
-                }
-            }
-            
-            // Esc para limpiar ediciones
-            if (event.key === 'Escape') {
-                const elementoActivo = document.activeElement;
-                if (elementoActivo.tagName === 'INPUT' && !elementoActivo.classList.contains('readonly')) {
-                    elementoActivo.style.backgroundColor = '';
-                    elementoActivo.style.borderColor = '#ddd';
-                }
+                document.getElementById('formBuscarCaja').submit();
             }
         });
 
         // Auto-focus en el campo de búsqueda de caja
         document.addEventListener('DOMContentLoaded', function() {
             setTimeout(() => {
-                <?php if (!empty($caja_seleccionada)): ?>
-                    // Si hay caja específica, enfocar en su formulario de modificación
-                    const cajaInput = document.querySelector('input[name="nuevo_lpn_caja"]');
-                    if (cajaInput) {
-                        cajaInput.focus();
-                    }
-                <?php else: ?>
-                    // Si no hay caja específica, enfocar en el buscador
-                    const searchInput = document.querySelector('input[name="caja_buscar"]');
-                    if (searchInput) {
-                        searchInput.focus();
-                    }
-                <?php endif; ?>
+                const searchInput = document.getElementById('inputCajaCompleta');
+                if (searchInput) {
+                    searchInput.focus();
+                    <?php if (!empty($id_caja_busqueda)): ?>
+                        searchInput.select();
+                    <?php endif; ?>
+                }
             }, 100);
+            
+            // Resaltar la caja seleccionada en la tabla
+            <?php if (!empty($caja_especifica) && !empty($lpn_original)): ?>
+                setTimeout(() => {
+                    const cajaSeleccionada = document.querySelector('.caja-seleccionada-tabla');
+                    if (cajaSeleccionada) {
+                        cajaSeleccionada.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+                }, 300);
+            <?php endif; ?>
         });
 
         // Confirmación para formulario grupal
-        <?php if (empty($caja_seleccionada)): ?>
+        <?php if (empty($caja_especifica) && !empty($lpn_original) && $total_cajas > 0): ?>
         document.getElementById('formGrupal').addEventListener('submit', function(e) {
             const nuevoLPN = this.querySelector('input[name="nuevo_lpn_grupal"]').value.trim();
             const nuevaUbicacion = this.querySelector('input[name="nueva_ubicacion_grupal"]').value.trim();
@@ -1723,19 +1648,6 @@ if (isset($_GET['msg'])) {
             }
         });
         <?php endif; ?>
-
-        // NUEVO: Resaltar la caja seleccionada en la tabla
-        document.addEventListener('DOMContentLoaded', function() {
-            <?php if (!empty($caja_seleccionada)): ?>
-                // Hacer scroll a la caja seleccionada
-                const cajaSeleccionada = document.querySelector('.caja-seleccionada-tabla');
-                if (cajaSeleccionada) {
-                    setTimeout(() => {
-                        cajaSeleccionada.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    }, 300);
-                }
-            <?php endif; ?>
-        });
     </script>
 </body>
 </html>

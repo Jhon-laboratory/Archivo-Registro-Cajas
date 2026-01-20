@@ -306,27 +306,23 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 }
                 
                 // Mensajes finales
-                if ($registros_procesados > 0) {
-                    $mensaje = "✅ $registros_procesados registro(s) insertado(s) correctamente.";
-                    $mensaje .= "<br>📍 <strong>Sede registrada:</strong> $sede";
-                    $mensaje .= "<br>🕐 <strong>Hora registrada:</strong> $fecha_formateada (ajustada -4h)";
-                    
-                    // Información sobre las nuevas tablas Master
-                    $mensaje .= "<br><br><strong>📊 Registros en tablas Master:</strong>";
-                    $mensaje .= "<br>• <strong>MasterLPN:</strong> $masterlpn_insertados LPN(s) único(s)";
-                    $mensaje .= "<br>• <strong>MasterCaja:</strong> $mastercaja_insertados ID(s) de caja único(s)";
-                    $mensaje .= "<br>• <strong>MasterUbicacion:</strong> $masterubicacion_insertados ubicacion(es) única(s)";
-                    
-                    if ($historico_insertados > 0) {
-                        $mensaje .= "<br><br>📜 $historico_insertados registro(s) en Historico.";
-                    } else {
-                        $mensaje .= "<br><br>⚠️ <strong>Nota:</strong> No se pudo guardar el registro histórico.";
-                    }
-                    
-                    if ($registros_con_error > 0) {
-                        $mensaje .= "<br>⚠️ Hubo $registros_con_error error(es) en MasterTable.";
-                    }
-                } else {
+                // Mensajes finales MUY SIMPLIFICADOS
+if ($registros_procesados > 0) {
+    // Calcular total de cajas procesadas
+    $total_cajas = 0;
+    foreach ($registros_por_lpn as $lpn => $datos) {
+        $total_cajas += $datos['cantidad'];
+    }
+    
+    // Contar LPNs únicos
+    $total_lpns = count($lpns_unicos);
+    
+    // Mensaje super simple
+    $mensaje = "✅ <strong>$total_cajas caja(s)</strong> procesada(s) correctamente.";
+    $mensaje .= "<br>🏷️ <strong>$total_lpns LPN(s)</strong> único(s) registrado(s)";
+    $mensaje .= "<br>📍 <strong>Sede:</strong> $sede";
+    $mensaje .= "<br>🕐 <strong>Hora:</strong> " . date('H:i:s', strtotime($fecha_hora));
+} else {
                     $error = "❌ No se insertaron registros. Verifique que los campos obligatorios estén completos.";
                     if (!empty($errores_detalle)) {
                         $error .= " Detalles: " . implode(" | ", $errores_detalle);
@@ -912,26 +908,41 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     });
 
     // ============================================
-    // NUEVO: FUNCIONES DE VALIDACIÓN
+    // NUEVO: FUNCIONES DE VALIDACIÓN CORREGIDAS
     // ============================================
     
     // Función para validar campo con AJAX
     function validarCampo(campo, valor, filaId) {
-        if (!valor.trim()) {
-            // Si está vacío, quitar marcador de duplicado y restaurar estilo
-            const input = document.querySelector(`#fila-${filaId} input[name="${campo}[]"]`);
-            if (input) {
-                input.classList.remove('input-duplicado', 'input-valido');
-                input.style.borderColor = '';
-                input.style.backgroundColor = '';
-                input.style.boxShadow = '';
+        // Obtener el valor anterior antes de cambiarlo
+        const input = document.querySelector(`#fila-${filaId} input[name="${campo}[]"]`);
+        if (!input) return;
+        
+        const valorAnterior = input.dataset.valorAnterior || '';
+        
+        // Guardar el valor actual como anterior para la próxima validación
+        input.dataset.valorAnterior = valor.trim();
+        
+        // Limpiar el valor anterior de datosDuplicados
+        if (valorAnterior && valorAnterior.trim()) {
+            if (campo === 'lpn') {
+                datosDuplicados.lpn.delete(valorAnterior);
+            } else if (campo === 'ubicacion') {
+                datosDuplicados.ubicacion.delete(valorAnterior);
             }
-            
-            // Remover icono de estado
-            const iconoEstado = document.querySelector(`#fila-${filaId} .estado-validacion`);
-            if (iconoEstado) iconoEstado.remove();
-            
-            // Quitar de datos duplicados
+        }
+        
+        // Limpiar estilo actual
+        input.classList.remove('input-duplicado', 'input-valido');
+        input.style.borderColor = '';
+        input.style.backgroundColor = '';
+        input.style.boxShadow = '';
+        
+        // Remover icono de estado anterior
+        const iconoEstado = input.parentNode.querySelector('.estado-validacion');
+        if (iconoEstado) iconoEstado.remove();
+        
+        if (!valor.trim()) {
+            // Si está vacío, quitar de datos duplicados
             if (campo === 'lpn') {
                 datosDuplicados.lpn.delete(valor);
             } else if (campo === 'ubicacion') {
@@ -943,14 +954,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
         
         // Mostrar indicador de validación
-        const input = document.querySelector(`#fila-${filaId} input[name="${campo}[]"]`);
-        if (!input) return;
-        
-        // Remover icono anterior si existe
-        const iconoAnterior = input.parentNode.querySelector('.estado-validacion');
-        if (iconoAnterior) iconoAnterior.remove();
-        
-        // Crear y agregar icono de validación
         const iconoValidando = document.createElement('span');
         iconoValidando.innerHTML = ' <i class="fa fa-spinner fa-spin" style="color:#007bff;"></i>';
         iconoValidando.className = 'estado-validacion';
@@ -987,7 +990,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             if (data.existe) {
                 // Marcar como duplicado
                 input.classList.add('input-duplicado');
-                input.classList.remove('input-valido');
                 input.style.borderColor = '#dc3545';
                 input.style.backgroundColor = '#ffe6e6';
                 input.style.boxShadow = '0 0 0 2px rgba(220,53,69,0.1)';
@@ -1002,13 +1004,13 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             } else {
                 // Marcar como válido
                 input.classList.add('input-valido');
-                input.classList.remove('input-duplicado');
                 input.style.borderColor = '#28a745';
                 input.style.backgroundColor = '#f0fff4';
                 input.style.boxShadow = '0 0 0 2px rgba(40,167,69,0.1)';
                 
                 iconoEstado.innerHTML = ' <i class="fa fa-check-circle" style="color:#28a745;" title="Dato válido"></i>';
                 
+                // Quitar de datos duplicados si estaba allí
                 if (campo === 'lpn') {
                     datosDuplicados.lpn.delete(valor);
                 } else if (campo === 'ubicacion') {

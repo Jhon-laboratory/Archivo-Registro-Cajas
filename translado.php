@@ -9,9 +9,6 @@ if (!isset($_SESSION['usuario']) || !isset($_SESSION['usuario_id'])) {
     exit;
 }
 
-// Obtener sede del usuario actual
-$sede_usuario = isset($_SESSION['tienda']) ? $_SESSION['tienda'] : '';
-
 // Configuración de conexión SQL Server
 $host = 'Jorgeserver.database.windows.net';
 $dbname = 'DPL';
@@ -24,97 +21,111 @@ $total_registros = 0;
 $total_cajas = 0;
 $mensaje = '';
 $error = '';
-$filtro_caja = isset($_GET['caja']) ? trim($_GET['caja']) : ''; // NUEVO FILTRO
+
+// NUEVO: Filtros separados por cliente y número de caja
+$filtro_cliente = isset($_GET['cliente']) ? trim($_GET['cliente']) : '';
+$filtro_num_caja = isset($_GET['num_caja']) ? trim($_GET['num_caja']) : '';
 $filtro_lpn = isset($_GET['lpn']) ? trim($_GET['lpn']) : '';
 $filtro_ubicacion = isset($_GET['ubicacion']) ? trim($_GET['ubicacion']) : '';
-$filtro_sede = isset($_GET['sede']) ? trim($_GET['sede']) : $sede_usuario;
 
-// Conectar a la base de datos
-try {
-    $connectionInfo = array(
-        "Database" => $dbname,
-        "UID" => $username,
-        "PWD" => $password,
-        "CharacterSet" => "UTF-8"
-    );
+// Variable para controlar si se debe mostrar datos
+$mostrar_datos = false;
+
+// Solo consultar la base de datos si hay al menos un filtro activo
+if (!empty($filtro_cliente) || !empty($filtro_num_caja) || !empty($filtro_lpn) || !empty($filtro_ubicacion)) {
+    $mostrar_datos = true;
     
-    $conn = sqlsrv_connect($host, $connectionInfo);
-    
-    if ($conn === false) {
-        $error = "Error de conexión a la base de datos.";
-        error_log("Error SQL Server: " . print_r(sqlsrv_errors(), true));
-    } else {
-        // Construir consulta con filtros
-        $sql = "SELECT 
-                    LPN,
-                    Ubicacion,
-                    Sede,
-                    Usuario,
-                    COUNT(ID_Caja) as CantidadCajas,
-                    MIN(FechaHora) as FechaPrimera,
-                    MAX(FechaHora) as FechaUltima
-                FROM DPL.pruebas.MasterTable
-                WHERE 1=1";
+    // Conectar a la base de datos
+    try {
+        $connectionInfo = array(
+            "Database" => $dbname,
+            "UID" => $username,
+            "PWD" => $password,
+            "CharacterSet" => "UTF-8"
+        );
         
-        $params = array();
+        $conn = sqlsrv_connect($host, $connectionInfo);
         
-        // NUEVO: Aplicar filtro por ID de caja
-        if (!empty($filtro_caja)) {
-            $sql .= " AND ID_Caja LIKE ?";
-            $params[] = '%' . $filtro_caja . '%';
-        }
-        
-        // Aplicar filtro por LPN
-        if (!empty($filtro_lpn)) {
-            $sql .= " AND LPN LIKE ?";
-            $params[] = '%' . $filtro_lpn . '%';
-        }
-        
-        // Aplicar filtro por ubicación
-        if (!empty($filtro_ubicacion)) {
-            $sql .= " AND Ubicacion LIKE ?";
-            $params[] = '%' . $filtro_ubicacion . '%';
-        }
-        
-        // Aplicar filtro por sede
-        if (!empty($filtro_sede)) {
-            $sql .= " AND Sede = ?";
-            $params[] = $filtro_sede;
-        }
-        
-        // Agrupar por LPN y otros campos
-        $sql .= " GROUP BY LPN, Ubicacion, Sede, Usuario
-                  ORDER BY MAX(FechaHora) DESC, LPN";
-        
-        // Ejecutar consulta
-        $stmt = sqlsrv_prepare($conn, $sql, $params);
-        
-        if ($stmt && sqlsrv_execute($stmt)) {
-            while ($row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC)) {
-                // Formatear fechas
-                if ($row['FechaPrimera'] instanceof DateTime) {
-                    $row['FechaPrimera'] = $row['FechaPrimera']->format('d/m/Y H:i');
-                }
-                
-                if ($row['FechaUltima'] instanceof DateTime) {
-                    $row['FechaUltima'] = $row['FechaUltima']->format('d/m/Y H:i');
-                }
-                
-                $resultados[] = $row;
-                $total_cajas += $row['CantidadCajas'];
-            }
-            $total_registros = count($resultados);
+        if ($conn === false) {
+            $error = "Error de conexión a la base de datos.";
+            error_log("Error SQL Server: " . print_r(sqlsrv_errors(), true));
         } else {
-            $error = "Error al ejecutar la consulta.";
-            if (($errors = sqlsrv_errors()) != null) {
-                error_log("Error SQL: " . print_r($errors, true));
+            // Construir consulta con filtros
+            $sql = "SELECT 
+                        LPN,
+                        Ubicacion,
+                        Sede,
+                        Usuario,
+                        COUNT(ID_Caja) as CantidadCajas,
+                        MIN(FechaHora) as FechaPrimera,
+                        MAX(FechaHora) as FechaUltima
+                    FROM DPL.pruebas.MasterTable
+                    WHERE 1=1";
+            
+            $params = array();
+            
+            // NUEVO: Aplicar filtro por código de cliente (antes de la C)
+            if (!empty($filtro_cliente)) {
+                // Buscar ID_Caja que empiece con el código del cliente seguido de 'C' o 'c'
+                $sql .= " AND (ID_Caja LIKE ? OR ID_Caja LIKE ?)";
+                $params[] = $filtro_cliente . 'C%';
+                $params[] = $filtro_cliente . 'c%';
             }
+            
+            // NUEVO: Aplicar filtro por número de caja (después de la C)
+            if (!empty($filtro_num_caja)) {
+                // Buscar ID_Caja que contenga 'C' o 'c' seguido del número de caja
+                $sql .= " AND (ID_Caja LIKE ? OR ID_Caja LIKE ?)";
+                $params[] = '%C' . $filtro_num_caja . '%';
+                $params[] = '%c' . $filtro_num_caja . '%';
+            }
+            
+            // Aplicar filtro por LPN
+            if (!empty($filtro_lpn)) {
+                $sql .= " AND LPN LIKE ?";
+                $params[] = '%' . $filtro_lpn . '%';
+            }
+            
+            // Aplicar filtro por ubicación
+            if (!empty($filtro_ubicacion)) {
+                $sql .= " AND Ubicacion LIKE ?";
+                $params[] = '%' . $filtro_ubicacion . '%';
+            }
+            
+            // Agrupar por LPN y otros campos
+            $sql .= " GROUP BY LPN, Ubicacion, Sede, Usuario
+                      ORDER BY MAX(FechaHora) DESC, LPN";
+            
+            // Ejecutar consulta
+            $stmt = sqlsrv_prepare($conn, $sql, $params);
+            
+            if ($stmt && sqlsrv_execute($stmt)) {
+                while ($row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC)) {
+                    // Formatear fechas
+                    if ($row['FechaPrimera'] instanceof DateTime) {
+                        $row['FechaPrimera'] = $row['FechaPrimera']->format('d/m/Y H:i');
+                    }
+                    
+                    if ($row['FechaUltima'] instanceof DateTime) {
+                        $row['FechaUltima'] = $row['FechaUltima']->format('d/m/Y H:i');
+                    }
+                    
+                    $resultados[] = $row;
+                    $total_cajas += $row['CantidadCajas'];
+                }
+                $total_registros = count($resultados);
+            } else {
+                $error = "Error al ejecutar la consulta.";
+                if (($errors = sqlsrv_errors()) != null) {
+                    error_log("Error SQL: " . print_r($errors, true));
+                }
+            }
+            
+            sqlsrv_close($conn);
         }
-        
-        sqlsrv_close($conn);
+    } catch (Exception $e) {
+        $error = "Excepción: " . $e->getMessage();
     }
-} catch (Exception $e) {
-    $error = "Excepción: " . $e->getMessage();
 }
 ?>
 <!DOCTYPE html>
@@ -228,8 +239,29 @@ try {
         }
         
         .form-control-sm:focus {
-            border-color: #009a3f;
+            border-color = #009a3f;
             box-shadow: 0 0 0 2px rgba(0, 154, 63, 0.1);
+        }
+        
+        /* Estilos específicos para campos de cliente y número de caja */
+        .caja-filters {
+            display: flex;
+            gap: 8px;
+            align-items: flex-end;
+            flex: 2;
+            min-width: 300px;
+        }
+        
+        .caja-filters .filter-field {
+            flex: 1;
+        }
+        
+        .separator-c {
+            color: #dc3545;
+            font-weight: bold;
+            font-size: 14px;
+            margin: 0 2px;
+            line-height: 32px;
         }
         
         .btn-traslado {
@@ -500,6 +532,35 @@ try {
             padding-right: 30px;
         }
         
+        /* Mensaje de bienvenida inicial */
+        .welcome-message {
+            background: #f0f8ff;
+            border-left: 4px solid #009a3f;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        
+        .welcome-message i {
+            font-size: 24px;
+            color: #009a3f;
+            margin-bottom: 10px;
+            display: block;
+        }
+        
+        .welcome-message h4 {
+            color: #333;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        
+        .welcome-message p {
+            color: #666;
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+        
         /* Footer específico */
         .footer-traslado {
             margin-top: 15px;
@@ -526,6 +587,16 @@ try {
             
             .filter-field {
                 min-width: 100%;
+            }
+            
+            .caja-filters {
+                min-width: 100%;
+                flex-direction: column;
+                gap: 8px;
+            }
+            
+            .separator-c {
+                display: none;
             }
             
             .results-table {
@@ -630,8 +701,6 @@ try {
 
             <!-- CONTENIDO PRINCIPAL CON CLASES DEL TEMPLATE -->
             <div class="right_col" role="main">
-                
-                
                 <div class="clearfix"></div>
                 
                 <div class="row">
@@ -642,7 +711,6 @@ try {
                                 <div class="clearfix"></div>
                             </div>
                             <div class="x_content">
-                                
 
                                 <!-- Mensajes -->
                                 <?php if (!empty($mensaje)): ?>
@@ -657,31 +725,51 @@ try {
                                     </div>
                                 <?php endif; ?>
 
-                                <!-- Panel de Filtros Compacto en una sola fila -->
+                                <!-- Panel de Filtros Compacto -->
                                 <div class="filters-panel">
                                     <div class="filter-title">
                                         <span><i class="fa fa-filter"></i> Filtros de Búsqueda</span>
-                                        <?php if (!empty($filtro_caja) || !empty($filtro_lpn) || !empty($filtro_ubicacion) || !empty($filtro_sede)): ?>
+                                        <?php if (!empty($filtro_cliente) || !empty($filtro_num_caja) || !empty($filtro_lpn) || !empty($filtro_ubicacion)): ?>
                                             <span class="info-badge">
-                                                <i class="fa fa-search"></i> Filtros activos
+                                                <i class="fa fa-search"></i> Búsqueda activa
                                             </span>
                                         <?php endif; ?>
                                     </div>
                                     
                                     <form method="GET" id="filtrosForm">
                                         <div class="filter-group">
-                                            <!-- NUEVO: Filtro por ID de Caja (PRIMERO) -->
-                                            <div class="filter-field search-field">
-                                                <label class="filter-label">Buscar por ID Caja:</label>
-                                                <input type="text" 
-                                                       name="caja" 
-                                                       id="inputCaja"
-                                                       class="form-control form-control-sm" 
-                                                       placeholder="Ej: CAJA-001"
-                                                       value="<?php echo htmlspecialchars($filtro_caja); ?>"
-                                                       autocomplete="off">
-                                                <div class="search-loading" id="loadingCaja">
-                                                    <i class="fa fa-spinner"></i>
+                                            <!-- Filtros separados para cliente y número de caja -->
+                                            <div class="caja-filters">
+                                                <div class="filter-field search-field">
+                                                    <label class="filter-label">Código Cliente:</label>
+                                                    <input type="text" 
+                                                           name="cliente" 
+                                                           id="inputCliente"
+                                                           class="form-control form-control-sm" 
+                                                           placeholder="Ej: 0000123"
+                                                           value="<?php echo htmlspecialchars($filtro_cliente); ?>"
+                                                           autocomplete="off"
+                                                           maxlength="20">
+                                                    <div class="search-loading" id="loadingCliente">
+                                                        <i class="fa fa-spinner"></i>
+                                                    </div>
+                                                </div>
+                                                
+                                                <div class="separator-c">C</div>
+                                                
+                                                <div class="filter-field search-field">
+                                                    <label class="filter-label">Número Caja:</label>
+                                                    <input type="text" 
+                                                           name="num_caja" 
+                                                           id="inputNumCaja"
+                                                           class="form-control form-control-sm" 
+                                                           placeholder="Ej: 0000001850"
+                                                           value="<?php echo htmlspecialchars($filtro_num_caja); ?>"
+                                                           autocomplete="off"
+                                                           maxlength="20">
+                                                    <div class="search-loading" id="loadingNumCaja">
+                                                        <i class="fa fa-spinner"></i>
+                                                    </div>
                                                 </div>
                                             </div>
                                             
@@ -713,16 +801,6 @@ try {
                                                 </div>
                                             </div>
                                             
-                                            <div class="filter-field">
-                                                <label class="filter-label">Filtrar por Sede:</label>
-                                                <select name="sede" id="selectSede" class="form-control form-control-sm">
-                                                    <option value="">Todas las Sedes</option>
-                                                    <option value="LPZ" <?php echo ($filtro_sede == 'LPZ') ? 'selected' : ''; ?>>LPZ - La Paz</option>
-                                                    <option value="CBBA" <?php echo ($filtro_sede == 'CBBA') ? 'selected' : ''; ?>>CBBA - Cochabamba</option>
-                                                    <option value="SCZ" <?php echo ($filtro_sede == 'SCZ') ? 'selected' : ''; ?>>SCZ - Santa Cruz</option>
-                                                </select>
-                                            </div>
-                                            
                                             <div class="filter-field" style="flex: 0 0 auto; display: flex; gap: 5px;">
                                                 <button type="submit" class="btn-traslado" id="btnBuscar">
                                                     <i class="fa fa-search"></i> Buscar
@@ -733,132 +811,159 @@ try {
                                             </div>
                                         </div>
                                     </form>
+                                    
+                                    <!-- Información del formato de caja -->
+                                    <div style="margin-top: 8px; font-size: 10px; color: #666; background: #f8f9fa; padding: 5px 8px; border-radius: 4px; border-left: 3px solid #009a3f;">
+                                        <strong><i class="fa fa-info-circle"></i> Formato de ID Caja:</strong> 
+                                        <code style="background: #fff; padding: 1px 4px; border-radius: 3px; border: 1px solid #ddd; margin: 0 3px;">0000123C0000001850</code> 
+                                        <span style="margin-left: 5px;">Donde <strong>0000123</strong> = Cliente, <strong>C</strong> = Separador, <strong>0000001850</strong> = N° Caja</span>
+                                    </div>
                                 </div>
 
-                                <!-- Resultados - Tabla como vista principal -->
-                                <div class="results-container">
-                                    <div class="results-header">
-                                        <div class="results-title">
-                                            <i class="fa fa-table"></i> Resumen de Pallets
+                                <?php if ($mostrar_datos): ?>
+                                    <!-- Resultados - Tabla como vista principal -->
+                                    <div class="results-container">
+                                        <div class="results-header">
+                                            <div class="results-title">
+                                                <i class="fa fa-table"></i> Resumen de Pallets
+                                            </div>
+                                            <div class="results-stats">
+                                                <?php echo $total_registros; ?> LPNs | <?php echo $total_cajas; ?> cajas
+                                                <?php if ($filtro_cliente): ?>
+                                                    <span style="color: #dc3545; margin-left: 5px;">
+                                                        <i class="fa fa-building"></i> Cliente: <?php echo htmlspecialchars($filtro_cliente); ?>
+                                                    </span>
+                                                <?php endif; ?>
+                                                <?php if ($filtro_num_caja): ?>
+                                                    <span style="color: #dc3545; margin-left: 5px;">
+                                                        <i class="fa fa-box"></i> N° Caja: <?php echo htmlspecialchars($filtro_num_caja); ?>
+                                                    </span>
+                                                <?php endif; ?>
+                                            </div>
                                         </div>
-                                        <div class="results-stats">
-                                            <?php echo $total_registros; ?> LPNs | <?php echo $total_cajas; ?> cajas
-                                            <?php if ($filtro_sede): ?>
-                                                <span style="color: #009a3f; margin-left: 5px;">
-                                                    <i class="fa fa-filter"></i> Sede: <?php echo $filtro_sede; ?>
-                                                </span>
-                                            <?php endif; ?>
-                                            <?php if ($filtro_caja): ?>
-                                                <span style="color: #dc3545; margin-left: 5px;">
-                                                    <i class="fa fa-box"></i> Caja: <?php echo htmlspecialchars($filtro_caja); ?>
-                                                </span>
-                                            <?php endif; ?>
-                                        </div>
-                                    </div>
-                                    
-                                    <?php if ($total_registros > 0): ?>
-                                        <table class="results-table" id="tablaResultados">
-                                            <thead>
-                                                <tr>
-                                                    <th width="15%">LPN</th>
-                                                    <th width="15%">Ubicación</th>
-                                                    <th width="8%"># Cajas</th>
-                                                    <th width="8%">Sede</th>
-                                                    <th width="15%">Usuario</th>
-                                                    <th width="12%">Primer Ingreso</th>
-                                                    <th width="12%">Último Ingreso</th>
-                                                    <th width="15%">Acciones</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                <?php foreach ($resultados as $row): ?>
-                                                    <tr>
-                                                        <td>
-                                                            <strong style="color: #009a3f; font-size: 11px;">
-                                                                <i class="fa fa-pallet"></i> <?php echo htmlspecialchars($row['LPN']); ?>
-                                                            </strong>
-                                                        </td>
-                                                        <td>
-                                                            <code style="background: #f8f9fa; padding: 2px 6px; border-radius: 3px; font-size: 11px;">
-                                                                <?php echo htmlspecialchars($row['Ubicacion']); ?>
-                                                            </code>
-                                                        </td>
-                                                        <td style="text-align: center;">
-                                                            <span class="badge-count">
-                                                                <?php echo $row['CantidadCajas']; ?>
-                                                            </span>
-                                                        </td>
-                                                        <td style="text-align: center;">
-                                                            <?php 
-                                                                $sede_class = 'badge-sede ';
-                                                                switch($row['Sede']) {
-                                                                    case 'LPZ': $sede_class .= 'badge-lpz'; break;
-                                                                    case 'CBBA': $sede_class .= 'badge-cbba'; break;
-                                                                    case 'SCZ': $sede_class .= 'badge-scz'; break;
-                                                                    default: $sede_class .= 'badge-secondary'; break;
-                                                                }
-                                                            ?>
-                                                            <span class="<?php echo $sede_class; ?>">
-                                                                <?php echo htmlspecialchars($row['Sede']); ?>
-                                                            </span>
-                                                        </td>
-                                                        <td>
-                                                            <small style="color: #666; font-size: 11px;">
-                                                                <i class="fa fa-user"></i> 
-                                                                <?php echo htmlspecialchars($row['Usuario']); ?>
-                                                            </small>
-                                                        </td>
-                                                        <td>
-                                                            <small style="color: #666; font-size: 10px;">
-                                                                <i class="fa fa-calendar-plus-o"></i>
-                                                                <?php echo $row['FechaPrimera']; ?>
-                                                            </small>
-                                                        </td>
-                                                        <td>
-                                                            <small style="color: #009a3f; font-weight: 600; font-size: 10px;">
-                                                                <i class="fa fa-calendar-check-o"></i>
-                                                                <?php echo $row['FechaUltima']; ?>
-                                                            </small>
-                                                        </td>
-                                                        <td>
-                                                            <!-- MODIFICACIÓN AQUÍ: Agregar parámetro caja si existe -->
-                                                            <a href="detalle_lpn.php?lpn=<?php echo urlencode($row['LPN']); ?>&sede=<?php echo urlencode($row['Sede']); ?><?php echo !empty($filtro_caja) ? '&caja=' . urlencode($filtro_caja) : ''; ?>" 
-                                                               class="btn-details">
-                                                                <i class="fa fa-eye"></i> Ver Detalle
-                                                            </a>
-                                                        </td>
-                                                    </tr>
-                                                <?php endforeach; ?>
-                                            </tbody>
-                                        </table>
                                         
-                                    <?php else: ?>
-                                        <div class="alert-traslado alert-warning-traslado" style="margin-top: 10px;" id="sinResultados">
-                                            <i class="fa fa-exclamation-triangle"></i> 
-                                            No se encontraron registros con los filtros aplicados.
-                                            <?php if (!empty($filtro_caja) || !empty($filtro_lpn) || !empty($filtro_ubicacion)): ?>
-                                                <br><small>Intente con otros términos de búsqueda o seleccione "Todas las Sedes".</small>
-                                            <?php endif; ?>
+                                        <?php if ($total_registros > 0): ?>
+                                            <table class="results-table" id="tablaResultados">
+                                                <thead>
+                                                    <tr>
+                                                        <th width="15%">LPN</th>
+                                                        <th width="15%">Ubicación</th>
+                                                        <th width="8%"># Cajas</th>
+                                                        <th width="8%">Sede</th>
+                                                        <th width="15%">Usuario</th>
+                                                        <th width="12%">Primer Ingreso</th>
+                                                        <th width="12%">Último Ingreso</th>
+                                                        <th width="15%">Acciones</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <?php foreach ($resultados as $row): ?>
+                                                        <tr>
+                                                            <td>
+                                                                <strong style="color: #009a3f; font-size: 11px;">
+                                                                    <i class="fa fa-pallet"></i> <?php echo htmlspecialchars($row['LPN']); ?>
+                                                                </strong>
+                                                            </td>
+                                                            <td>
+                                                                <code style="background: #f8f9fa; padding: 2px 6px; border-radius: 3px; font-size: 11px;">
+                                                                    <?php echo htmlspecialchars($row['Ubicacion']); ?>
+                                                                </code>
+                                                            </td>
+                                                            <td style="text-align: center;">
+                                                                <span class="badge-count">
+                                                                    <?php echo $row['CantidadCajas']; ?>
+                                                                </span>
+                                                            </td>
+                                                            <td style="text-align: center;">
+                                                                <?php 
+                                                                    $sede_class = 'badge-sede ';
+                                                                    switch($row['Sede']) {
+                                                                        case 'LPZ': $sede_class .= 'badge-lpz'; break;
+                                                                        case 'CBBA': $sede_class .= 'badge-cbba'; break;
+                                                                        case 'SCZ': $sede_class .= 'badge-scz'; break;
+                                                                        default: $sede_class .= 'badge-secondary'; break;
+                                                                    }
+                                                                ?>
+                                                                <span class="<?php echo $sede_class; ?>">
+                                                                    <?php echo htmlspecialchars($row['Sede']); ?>
+                                                                </span>
+                                                            </td>
+                                                            <td>
+                                                                <small style="color: #666; font-size: 11px;">
+                                                                    <i class="fa fa-user"></i> 
+                                                                    <?php echo htmlspecialchars($row['Usuario']); ?>
+                                                                </small>
+                                                            </td>
+                                                            <td>
+                                                                <small style="color: #666; font-size: 10px;">
+                                                                    <i class="fa fa-calendar-plus-o"></i>
+                                                                    <?php echo $row['FechaPrimera']; ?>
+                                                                </small>
+                                                            </td>
+                                                            <td>
+                                                                <small style="color: #009a3f; font-weight: 600; font-size: 10px;">
+                                                                    <i class="fa fa-calendar-check-o"></i>
+                                                                    <?php echo $row['FechaUltima']; ?>
+                                                                </small>
+                                                            </td>
+                                                            <td>
+                                                                <?php
+                                                                    // Construir el ID de caja concatenado si hay filtros
+                                                                    $caja_completa = '';
+                                                                    if (!empty($filtro_cliente) && !empty($filtro_num_caja)) {
+                                                                        $caja_completa = $filtro_cliente . 'C' . $filtro_num_caja;
+                                                                    } elseif (!empty($filtro_cliente)) {
+                                                                        $caja_completa = $filtro_cliente . 'C';
+                                                                    } elseif (!empty($filtro_num_caja)) {
+                                                                        $caja_completa = 'C' . $filtro_num_caja;
+                                                                    }
+                                                                ?>
+                                                                
+                                                                <a href="detalle_lpn.php?lpn=<?php echo urlencode($row['LPN']); ?>&sede=<?php echo urlencode($row['Sede']); ?><?php echo !empty($filtro_cliente) ? '&cliente=' . urlencode($filtro_cliente) : ''; ?><?php echo !empty($filtro_num_caja) ? '&num_caja=' . urlencode($filtro_num_caja) : ''; ?><?php echo !empty($caja_completa) ? '&caja_completa=' . urlencode($caja_completa) : ''; ?>" 
+                                                                   class="btn-details">
+                                                                    <i class="fa fa-eye"></i> Ver Detalle
+                                                                </a>
+                                                            </td>
+                                                        </tr>
+                                                    <?php endforeach; ?>
+                                                </tbody>
+                                            </table>
+                                            
+                                        <?php else: ?>
+                                            <div class="alert-traslado alert-warning-traslado" style="margin-top: 10px;" id="sinResultados">
+                                                <i class="fa fa-exclamation-triangle"></i> 
+                                                No se encontraron registros con los filtros aplicados.
+                                                <br><small>Intente con otros términos de búsqueda.</small>
+                                            </div>
+                                        <?php endif; ?>
+                                    </div>
+
+                                    <!-- Información del filtro aplicado (solo si hay filtros) -->
+                                    <?php if (!empty($filtro_cliente) || !empty($filtro_num_caja) || !empty($filtro_lpn) || !empty($filtro_ubicacion)): ?>
+                                        <div class="alert-traslado alert-info-traslado" id="infoFiltros">
+                                            <i class="fa fa-info-circle"></i> 
+                                            <strong>Filtros aplicados:</strong>
+                                            <?php 
+                                                $filtros = [];
+                                                if (!empty($filtro_cliente)) $filtros[] = "<strong style='color:#dc3545;'>Cliente:</strong> '$filtro_cliente'";
+                                                if (!empty($filtro_num_caja)) $filtros[] = "<strong style='color:#dc3545;'>N° Caja:</strong> '$filtro_num_caja'";
+                                                if (!empty($filtro_lpn)) $filtros[] = "<strong>LPN:</strong> '$filtro_lpn'";
+                                                if (!empty($filtro_ubicacion)) $filtros[] = "<strong>Ubicación:</strong> '$filtro_ubicacion'";
+                                                echo implode(' | ', $filtros);
+                                            ?>
+                                            <a href="translado.php" style="margin-left: 10px; font-size: 10px;">
+                                                <i class="fa fa-times"></i> Limpiar todos
+                                            </a>
                                         </div>
                                     <?php endif; ?>
-                                </div>
-
-                                <!-- Información del filtro aplicado (solo si hay filtros) -->
-                                <?php if (!empty($filtro_caja) || !empty($filtro_lpn) || !empty($filtro_ubicacion) || !empty($filtro_sede)): ?>
-                                    <div class="alert-traslado alert-info-traslado" id="infoFiltros">
-                                        <i class="fa fa-info-circle"></i> 
-                                        <strong>Filtros aplicados:</strong>
-                                        <?php 
-                                            $filtros = [];
-                                            if (!empty($filtro_caja)) $filtros[] = "<strong style='color:#dc3545;'>Caja:</strong> '$filtro_caja'";
-                                            if (!empty($filtro_lpn)) $filtros[] = "<strong>LPN:</strong> '$filtro_lpn'";
-                                            if (!empty($filtro_ubicacion)) $filtros[] = "<strong>Ubicación:</strong> '$filtro_ubicacion'";
-                                            if (!empty($filtro_sede)) $filtros[] = "<strong>Sede:</strong> '$filtro_sede'";
-                                            echo implode(' | ', $filtros);
-                                        ?>
-                                        <a href="translado.php" style="margin-left: 10px; font-size: 10px;">
-                                            <i class="fa fa-times"></i> Limpiar todos
-                                        </a>
+                                <?php else: ?>
+                                    <!-- Mensaje de bienvenida cuando no hay búsqueda -->
+                                    <div class="welcome-message">
+                                        <i class="fa fa-search"></i>
+                                        <h4>Bienvenido al Sistema de Traslados</h4>
+                                        <p>Utilice los filtros de búsqueda para encontrar pallets.</p>
+                                        <p>Los resultados aparecerán aquí después de realizar una búsqueda.</p>
+                                        <p><small><i class="fa fa-lightbulb-o"></i> Puede buscar por cliente, número de caja, LPN o ubicación.</small></p>
                                     </div>
                                 <?php endif; ?>
 
@@ -866,12 +971,13 @@ try {
                                 <div class="instructions">
                                     <h5><i class="fa fa-lightbulb-o"></i> Instrucciones rápidas:</h5>
                                     <ul>
-                                        <li><strong>ID Caja:</strong> Busca pallets que contengan una caja específica</li>
+                                        <li><strong>Cliente/N° Caja:</strong> Busca pallets por código de cliente y/o número de caja</li>
+                                        <li><strong>Formato caja:</strong> 0000123<strong>C</strong>0000001850 (Cliente + C + N° Caja)</li>
                                         <li><strong>Búsqueda automática:</strong> Filtra automáticamente al escribir en cualquier campo</li>
                                         <li><strong>Cada fila</strong> representa un pallet (LPN) único</li>
                                         <li><strong># Cajas:</strong> Total de cajas en ese pallet</li>
-                                        <li><strong>Sede:</strong> Se filtra automáticamente por tu sede (<?php echo $sede_usuario; ?>)</li>
-                                        <li><strong>Ctrl+F:</strong> Para buscar rápidamente en ID Caja</li>
+                                        <li><strong>Ctrl+F:</strong> Para buscar rápidamente en Cliente</li>
+                                        <li><strong>Ctrl+B:</strong> Para buscar rápidamente en N° Caja</li>
                                         <li><strong>Esc:</strong> Limpia el campo de búsqueda actual</li>
                                     </ul>
                                 </div>
@@ -901,7 +1007,8 @@ try {
 
     <script>
         // Variables para control del filtrado automático
-        let timeoutCaja = null; // NUEVO
+        let timeoutCliente = null;
+        let timeoutNumCaja = null;
         let timeoutLPN = null;
         let timeoutUbicacion = null;
         let isSubmitting = false;
@@ -955,12 +1062,22 @@ try {
             document.getElementById('filtrosForm').submit();
         }
 
-        // NUEVO: Event listener para búsqueda automática en ID Caja
-        document.getElementById('inputCaja').addEventListener('input', function() {
-            clearTimeout(timeoutCaja);
-            mostrarLoading('Caja');
+        // Event listener para búsqueda automática en Cliente
+        document.getElementById('inputCliente').addEventListener('input', function() {
+            clearTimeout(timeoutCliente);
+            mostrarLoading('Cliente');
             
-            timeoutCaja = setTimeout(function() {
+            timeoutCliente = setTimeout(function() {
+                aplicarFiltroAutomatico();
+            }, debounceDelay);
+        });
+
+        // Event listener para búsqueda automática en Número de Caja
+        document.getElementById('inputNumCaja').addEventListener('input', function() {
+            clearTimeout(timeoutNumCaja);
+            mostrarLoading('NumCaja');
+            
+            timeoutNumCaja = setTimeout(function() {
                 aplicarFiltroAutomatico();
             }, debounceDelay);
         });
@@ -985,13 +1102,15 @@ try {
             }, debounceDelay);
         });
 
-        // Auto-submit al cambiar sede
-        document.getElementById('selectSede').addEventListener('change', function() {
-            aplicarFiltroAutomatico();
+        // Limpiar campo al presionar Esc
+        document.getElementById('inputCliente').addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                this.value = '';
+                aplicarFiltroAutomatico();
+            }
         });
 
-        // Limpiar campo al presionar Esc
-        document.getElementById('inputCaja').addEventListener('keydown', function(event) {
+        document.getElementById('inputNumCaja').addEventListener('keydown', function(event) {
             if (event.key === 'Escape') {
                 this.value = '';
                 aplicarFiltroAutomatico();
@@ -1012,24 +1131,21 @@ try {
             }
         });
 
-        // Auto-focus en el primer campo de búsqueda (AHORA ES ID CAJA)
+        // Auto-focus en el primer campo de búsqueda (Cliente)
         document.addEventListener('DOMContentLoaded', function() {
-            const firstInput = document.getElementById('inputCaja');
+            const firstInput = document.getElementById('inputCliente');
             if (firstInput) {
                 firstInput.focus();
-                // Seleccionar texto si ya tiene valor
-                if (firstInput.value) {
-                    firstInput.select();
-                }
             }
         });
 
         // Submit al presionar Enter en cualquier campo de búsqueda
-        document.querySelectorAll('#inputCaja, #inputLPN, #inputUbicacion').forEach(input => {
+        document.querySelectorAll('#inputCliente, #inputNumCaja, #inputLPN, #inputUbicacion').forEach(input => {
             input.addEventListener('keypress', function(event) {
                 if (event.key === 'Enter') {
                     event.preventDefault();
-                    clearTimeout(timeoutCaja);
+                    clearTimeout(timeoutCliente);
+                    clearTimeout(timeoutNumCaja);
                     clearTimeout(timeoutLPN);
                     clearTimeout(timeoutUbicacion);
                     aplicarFiltroAutomatico();
@@ -1037,11 +1153,22 @@ try {
             });
         });
 
-        // Atajo de teclado Ctrl+F para buscar (AHORA en ID Caja)
+        // Atajos de teclado
         document.addEventListener('keydown', function(event) {
+            // Ctrl+F para buscar en Cliente
             if (event.ctrlKey && event.key === 'f') {
                 event.preventDefault();
-                const searchInput = document.getElementById('inputCaja');
+                const searchInput = document.getElementById('inputCliente');
+                if (searchInput) {
+                    searchInput.focus();
+                    searchInput.select();
+                }
+            }
+            
+            // Ctrl+B para buscar en Número de Caja
+            if (event.ctrlKey && event.key === 'b') {
+                event.preventDefault();
+                const searchInput = document.getElementById('inputNumCaja');
                 if (searchInput) {
                     searchInput.focus();
                     searchInput.select();
@@ -1054,17 +1181,7 @@ try {
                 limpiarFiltros();
             }
             
-            // Atajo Ctrl+C para ir directamente a buscar por caja
-            if (event.ctrlKey && event.key === 'c') {
-                event.preventDefault();
-                const cajaInput = document.getElementById('inputCaja');
-                if (cajaInput) {
-                    cajaInput.focus();
-                    cajaInput.select();
-                }
-            }
-            
-            // Atajo Ctrl+P para ir a buscar por LPN
+            // Atajo Ctrl+P para buscar por LPN
             if (event.ctrlKey && event.key === 'p') {
                 event.preventDefault();
                 const lpnInput = document.getElementById('inputLPN');
@@ -1073,13 +1190,34 @@ try {
                     lpnInput.select();
                 }
             }
+            
+            // Atajo Ctrl+U para buscar por Ubicación
+            if (event.ctrlKey && event.key === 'u') {
+                event.preventDefault();
+                const ubicacionInput = document.getElementById('inputUbicacion');
+                if (ubicacionInput) {
+                    ubicacionInput.focus();
+                    ubicacionInput.select();
+                }
+            }
         });
 
-        // Mostrar contador de caracteres en tiempo real
-        document.getElementById('inputCaja').addEventListener('input', function() {
+        // Feedback visual para campos de cliente y número de caja
+        document.getElementById('inputCliente').addEventListener('input', function() {
             const valor = this.value.trim();
             if (valor.length > 0) {
-                this.style.borderColor = '#dc3545'; // Color rojo para destacar
+                this.style.borderColor = '#dc3545';
+                this.style.boxShadow = '0 0 0 2px rgba(220, 53, 69, 0.2)';
+            } else {
+                this.style.borderColor = '#ddd';
+                this.style.boxShadow = 'none';
+            }
+        });
+
+        document.getElementById('inputNumCaja').addEventListener('input', function() {
+            const valor = this.value.trim();
+            if (valor.length > 0) {
+                this.style.borderColor = '#dc3545';
                 this.style.boxShadow = '0 0 0 2px rgba(220, 53, 69, 0.2)';
             } else {
                 this.style.borderColor = '#ddd';
@@ -1111,45 +1249,32 @@ try {
 
         // Limpiar timeouts cuando se cierra la página
         window.addEventListener('beforeunload', function() {
-            clearTimeout(timeoutCaja);
+            clearTimeout(timeoutCliente);
+            clearTimeout(timeoutNumCaja);
             clearTimeout(timeoutLPN);
             clearTimeout(timeoutUbicacion);
         });
 
         // Feedback visual para mostrar que se está filtrando
         function mostrarFeedbackFiltrado() {
-            const tabla = document.getElementById('tablaResultados');
-            if (tabla) {
-                tabla.style.opacity = '0.7';
-                tabla.style.transition = 'opacity 0.2s';
+            const welcomeMsg = document.querySelector('.welcome-message');
+            if (welcomeMsg) {
+                welcomeMsg.style.opacity = '0.7';
+                welcomeMsg.style.transition = 'opacity 0.2s';
                 
                 setTimeout(() => {
-                    if (tabla) {
-                        tabla.style.opacity = '1';
+                    if (welcomeMsg) {
+                        welcomeMsg.style.opacity = '1';
                     }
                 }, 300);
             }
         }
 
         // Llamar a mostrarFeedbackFiltrado cuando se inicia el filtrado
-        document.getElementById('inputCaja').addEventListener('input', mostrarFeedbackFiltrado);
+        document.getElementById('inputCliente').addEventListener('input', mostrarFeedbackFiltrado);
+        document.getElementById('inputNumCaja').addEventListener('input', mostrarFeedbackFiltrado);
         document.getElementById('inputLPN').addEventListener('input', mostrarFeedbackFiltrado);
         document.getElementById('inputUbicacion').addEventListener('input', mostrarFeedbackFiltrado);
-        document.getElementById('selectSede').addEventListener('change', mostrarFeedbackFiltrado);
-
-        // Indicar visualmente que el campo ID Caja es especial
-        document.addEventListener('DOMContentLoaded', function() {
-            const cajaInput = document.getElementById('inputCaja');
-            if (cajaInput) {
-                // Agregar tooltip
-                cajaInput.title = "Busca pallets que contengan esta caja específica";
-                
-                // Agregar placeholder dinámico
-                if (!cajaInput.value) {
-                    cajaInput.placeholder = "CAJA-001 (Búsqueda principal)";
-                }
-            }
-        });
     </script>
 </body>
 </html>
