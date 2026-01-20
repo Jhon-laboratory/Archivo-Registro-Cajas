@@ -24,6 +24,7 @@ $total_registros = 0;
 $total_cajas = 0;
 $mensaje = '';
 $error = '';
+$filtro_caja = isset($_GET['caja']) ? trim($_GET['caja']) : ''; // NUEVO FILTRO
 $filtro_lpn = isset($_GET['lpn']) ? trim($_GET['lpn']) : '';
 $filtro_ubicacion = isset($_GET['ubicacion']) ? trim($_GET['ubicacion']) : '';
 $filtro_sede = isset($_GET['sede']) ? trim($_GET['sede']) : $sede_usuario;
@@ -56,6 +57,12 @@ try {
                 WHERE 1=1";
         
         $params = array();
+        
+        // NUEVO: Aplicar filtro por ID de caja
+        if (!empty($filtro_caja)) {
+            $sql .= " AND ID_Caja LIKE ?";
+            $params[] = '%' . $filtro_caja . '%';
+        }
         
         // Aplicar filtro por LPN
         if (!empty($filtro_lpn)) {
@@ -201,7 +208,7 @@ try {
         
         .filter-field {
             flex: 1;
-            min-width: 180px;
+            min-width: 160px;
         }
         
         .filter-label {
@@ -654,7 +661,7 @@ try {
                                 <div class="filters-panel">
                                     <div class="filter-title">
                                         <span><i class="fa fa-filter"></i> Filtros de Búsqueda</span>
-                                        <?php if (!empty($filtro_lpn) || !empty($filtro_ubicacion) || !empty($filtro_sede)): ?>
+                                        <?php if (!empty($filtro_caja) || !empty($filtro_lpn) || !empty($filtro_ubicacion) || !empty($filtro_sede)): ?>
                                             <span class="info-badge">
                                                 <i class="fa fa-search"></i> Filtros activos
                                             </span>
@@ -663,6 +670,21 @@ try {
                                     
                                     <form method="GET" id="filtrosForm">
                                         <div class="filter-group">
+                                            <!-- NUEVO: Filtro por ID de Caja (PRIMERO) -->
+                                            <div class="filter-field search-field">
+                                                <label class="filter-label">Buscar por ID Caja:</label>
+                                                <input type="text" 
+                                                       name="caja" 
+                                                       id="inputCaja"
+                                                       class="form-control form-control-sm" 
+                                                       placeholder="Ej: CAJA-001"
+                                                       value="<?php echo htmlspecialchars($filtro_caja); ?>"
+                                                       autocomplete="off">
+                                                <div class="search-loading" id="loadingCaja">
+                                                    <i class="fa fa-spinner"></i>
+                                                </div>
+                                            </div>
+                                            
                                             <div class="filter-field search-field">
                                                 <label class="filter-label">Buscar por LPN:</label>
                                                 <input type="text" 
@@ -705,6 +727,9 @@ try {
                                                 <button type="submit" class="btn-traslado" id="btnBuscar">
                                                     <i class="fa fa-search"></i> Buscar
                                                 </button>
+                                                <button type="button" class="btn-secondary-traslado" onclick="limpiarFiltros()">
+                                                    <i class="fa fa-times"></i> Limpiar
+                                                </button>
                                             </div>
                                         </div>
                                     </form>
@@ -721,6 +746,11 @@ try {
                                             <?php if ($filtro_sede): ?>
                                                 <span style="color: #009a3f; margin-left: 5px;">
                                                     <i class="fa fa-filter"></i> Sede: <?php echo $filtro_sede; ?>
+                                                </span>
+                                            <?php endif; ?>
+                                            <?php if ($filtro_caja): ?>
+                                                <span style="color: #dc3545; margin-left: 5px;">
+                                                    <i class="fa fa-box"></i> Caja: <?php echo htmlspecialchars($filtro_caja); ?>
                                                 </span>
                                             <?php endif; ?>
                                         </div>
@@ -791,7 +821,8 @@ try {
                                                             </small>
                                                         </td>
                                                         <td>
-                                                            <a href="detalle_lpn.php?lpn=<?php echo urlencode($row['LPN']); ?>&sede=<?php echo urlencode($row['Sede']); ?>" 
+                                                            <!-- MODIFICACIÓN AQUÍ: Agregar parámetro caja si existe -->
+                                                            <a href="detalle_lpn.php?lpn=<?php echo urlencode($row['LPN']); ?>&sede=<?php echo urlencode($row['Sede']); ?><?php echo !empty($filtro_caja) ? '&caja=' . urlencode($filtro_caja) : ''; ?>" 
                                                                class="btn-details">
                                                                 <i class="fa fa-eye"></i> Ver Detalle
                                                             </a>
@@ -805,7 +836,7 @@ try {
                                         <div class="alert-traslado alert-warning-traslado" style="margin-top: 10px;" id="sinResultados">
                                             <i class="fa fa-exclamation-triangle"></i> 
                                             No se encontraron registros con los filtros aplicados.
-                                            <?php if (!empty($filtro_lpn) || !empty($filtro_ubicacion)): ?>
+                                            <?php if (!empty($filtro_caja) || !empty($filtro_lpn) || !empty($filtro_ubicacion)): ?>
                                                 <br><small>Intente con otros términos de búsqueda o seleccione "Todas las Sedes".</small>
                                             <?php endif; ?>
                                         </div>
@@ -813,12 +844,13 @@ try {
                                 </div>
 
                                 <!-- Información del filtro aplicado (solo si hay filtros) -->
-                                <?php if (!empty($filtro_lpn) || !empty($filtro_ubicacion) || !empty($filtro_sede)): ?>
+                                <?php if (!empty($filtro_caja) || !empty($filtro_lpn) || !empty($filtro_ubicacion) || !empty($filtro_sede)): ?>
                                     <div class="alert-traslado alert-info-traslado" id="infoFiltros">
                                         <i class="fa fa-info-circle"></i> 
                                         <strong>Filtros aplicados:</strong>
                                         <?php 
                                             $filtros = [];
+                                            if (!empty($filtro_caja)) $filtros[] = "<strong style='color:#dc3545;'>Caja:</strong> '$filtro_caja'";
                                             if (!empty($filtro_lpn)) $filtros[] = "<strong>LPN:</strong> '$filtro_lpn'";
                                             if (!empty($filtro_ubicacion)) $filtros[] = "<strong>Ubicación:</strong> '$filtro_ubicacion'";
                                             if (!empty($filtro_sede)) $filtros[] = "<strong>Sede:</strong> '$filtro_sede'";
@@ -834,11 +866,12 @@ try {
                                 <div class="instructions">
                                     <h5><i class="fa fa-lightbulb-o"></i> Instrucciones rápidas:</h5>
                                     <ul>
-                                        <li><strong>Búsqueda automática:</strong> Filtra automáticamente al escribir en LPN o Ubicación</li>
+                                        <li><strong>ID Caja:</strong> Busca pallets que contengan una caja específica</li>
+                                        <li><strong>Búsqueda automática:</strong> Filtra automáticamente al escribir en cualquier campo</li>
                                         <li><strong>Cada fila</strong> representa un pallet (LPN) único</li>
                                         <li><strong># Cajas:</strong> Total de cajas en ese pallet</li>
                                         <li><strong>Sede:</strong> Se filtra automáticamente por tu sede (<?php echo $sede_usuario; ?>)</li>
-                                        <li><strong>Ctrl+F:</strong> Para buscar rápidamente</li>
+                                        <li><strong>Ctrl+F:</strong> Para buscar rápidamente en ID Caja</li>
                                         <li><strong>Esc:</strong> Limpia el campo de búsqueda actual</li>
                                     </ul>
                                 </div>
@@ -868,6 +901,7 @@ try {
 
     <script>
         // Variables para control del filtrado automático
+        let timeoutCaja = null; // NUEVO
         let timeoutLPN = null;
         let timeoutUbicacion = null;
         let isSubmitting = false;
@@ -921,6 +955,16 @@ try {
             document.getElementById('filtrosForm').submit();
         }
 
+        // NUEVO: Event listener para búsqueda automática en ID Caja
+        document.getElementById('inputCaja').addEventListener('input', function() {
+            clearTimeout(timeoutCaja);
+            mostrarLoading('Caja');
+            
+            timeoutCaja = setTimeout(function() {
+                aplicarFiltroAutomatico();
+            }, debounceDelay);
+        });
+
         // Event listeners para búsqueda automática en LPN
         document.getElementById('inputLPN').addEventListener('input', function() {
             clearTimeout(timeoutLPN);
@@ -947,6 +991,13 @@ try {
         });
 
         // Limpiar campo al presionar Esc
+        document.getElementById('inputCaja').addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                this.value = '';
+                aplicarFiltroAutomatico();
+            }
+        });
+
         document.getElementById('inputLPN').addEventListener('keydown', function(event) {
             if (event.key === 'Escape') {
                 this.value = '';
@@ -961,9 +1012,9 @@ try {
             }
         });
 
-        // Auto-focus en el primer campo de búsqueda
+        // Auto-focus en el primer campo de búsqueda (AHORA ES ID CAJA)
         document.addEventListener('DOMContentLoaded', function() {
-            const firstInput = document.getElementById('inputLPN');
+            const firstInput = document.getElementById('inputCaja');
             if (firstInput) {
                 firstInput.focus();
                 // Seleccionar texto si ya tiene valor
@@ -974,10 +1025,11 @@ try {
         });
 
         // Submit al presionar Enter en cualquier campo de búsqueda
-        document.querySelectorAll('#inputLPN, #inputUbicacion').forEach(input => {
+        document.querySelectorAll('#inputCaja, #inputLPN, #inputUbicacion').forEach(input => {
             input.addEventListener('keypress', function(event) {
                 if (event.key === 'Enter') {
                     event.preventDefault();
+                    clearTimeout(timeoutCaja);
                     clearTimeout(timeoutLPN);
                     clearTimeout(timeoutUbicacion);
                     aplicarFiltroAutomatico();
@@ -985,11 +1037,11 @@ try {
             });
         });
 
-        // Atajo de teclado Ctrl+F para buscar
+        // Atajo de teclado Ctrl+F para buscar (AHORA en ID Caja)
         document.addEventListener('keydown', function(event) {
             if (event.ctrlKey && event.key === 'f') {
                 event.preventDefault();
-                const searchInput = document.getElementById('inputLPN');
+                const searchInput = document.getElementById('inputCaja');
                 if (searchInput) {
                     searchInput.focus();
                     searchInput.select();
@@ -1001,9 +1053,40 @@ try {
                 event.preventDefault();
                 limpiarFiltros();
             }
+            
+            // Atajo Ctrl+C para ir directamente a buscar por caja
+            if (event.ctrlKey && event.key === 'c') {
+                event.preventDefault();
+                const cajaInput = document.getElementById('inputCaja');
+                if (cajaInput) {
+                    cajaInput.focus();
+                    cajaInput.select();
+                }
+            }
+            
+            // Atajo Ctrl+P para ir a buscar por LPN
+            if (event.ctrlKey && event.key === 'p') {
+                event.preventDefault();
+                const lpnInput = document.getElementById('inputLPN');
+                if (lpnInput) {
+                    lpnInput.focus();
+                    lpnInput.select();
+                }
+            }
         });
 
-        // Mostrar contador de caracteres en tiempo real (opcional)
+        // Mostrar contador de caracteres en tiempo real
+        document.getElementById('inputCaja').addEventListener('input', function() {
+            const valor = this.value.trim();
+            if (valor.length > 0) {
+                this.style.borderColor = '#dc3545'; // Color rojo para destacar
+                this.style.boxShadow = '0 0 0 2px rgba(220, 53, 69, 0.2)';
+            } else {
+                this.style.borderColor = '#ddd';
+                this.style.boxShadow = 'none';
+            }
+        });
+
         document.getElementById('inputLPN').addEventListener('input', function() {
             const valor = this.value.trim();
             if (valor.length > 0) {
@@ -1028,6 +1111,7 @@ try {
 
         // Limpiar timeouts cuando se cierra la página
         window.addEventListener('beforeunload', function() {
+            clearTimeout(timeoutCaja);
             clearTimeout(timeoutLPN);
             clearTimeout(timeoutUbicacion);
         });
@@ -1048,9 +1132,24 @@ try {
         }
 
         // Llamar a mostrarFeedbackFiltrado cuando se inicia el filtrado
+        document.getElementById('inputCaja').addEventListener('input', mostrarFeedbackFiltrado);
         document.getElementById('inputLPN').addEventListener('input', mostrarFeedbackFiltrado);
         document.getElementById('inputUbicacion').addEventListener('input', mostrarFeedbackFiltrado);
         document.getElementById('selectSede').addEventListener('change', mostrarFeedbackFiltrado);
+
+        // Indicar visualmente que el campo ID Caja es especial
+        document.addEventListener('DOMContentLoaded', function() {
+            const cajaInput = document.getElementById('inputCaja');
+            if (cajaInput) {
+                // Agregar tooltip
+                cajaInput.title = "Busca pallets que contengan esta caja específica";
+                
+                // Agregar placeholder dinámico
+                if (!cajaInput.value) {
+                    cajaInput.placeholder = "CAJA-001 (Búsqueda principal)";
+                }
+            }
+        });
     </script>
 </body>
 </html>

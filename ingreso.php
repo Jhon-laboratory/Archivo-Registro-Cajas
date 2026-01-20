@@ -15,6 +15,35 @@ $dbname = 'DPL';
 $username = 'Jmmc';
 $password = 'ChaosSoldier01';
 
+// ============================================
+// NUEVO: Función para validar existencia
+// ============================================
+function validarExistencia($campo, $valor, $conn) {
+    if (empty($valor)) return false;
+    
+    $sql = "";
+    if ($campo === 'LPN') {
+        $sql = "SELECT TOP 1 LPN FROM DPL.pruebas.MasterTable WHERE LPN = ?";
+    } elseif ($campo === 'Ubicacion') {
+        $sql = "SELECT TOP 1 Ubicacion FROM DPL.pruebas.MasterTable WHERE Ubicacion = ?";
+    } else {
+        return false;
+    }
+    
+    $params = array($valor);
+    $stmt = sqlsrv_prepare($conn, $sql, $params);
+    
+    if ($stmt && sqlsrv_execute($stmt)) {
+        if (sqlsrv_fetch($stmt)) {
+            sqlsrv_free_stmt($stmt);
+            return true; // Existe en la base de datos
+        }
+        sqlsrv_free_stmt($stmt);
+    }
+    
+    return false; // No existe
+}
+
 // Variables
 $mensaje = '';
 $error = '';
@@ -60,228 +89,255 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         error_log("Hora ajustada (-4): $fecha_hora");
         error_log("Fecha para Master tables: $fecha_solo");
         
-        // Procesar múltiples registros si existen
-        $registros_procesados = 0;
-        $registros_con_error = 0;
-        $errores_detalle = [];
-        
-        // Agrupar registros por LPN para el histórico
-        $registros_por_lpn = [];
-        
-        // Conjuntos para evitar duplicados en las nuevas tablas Master
-        $lpns_unicos = [];
-        $idcajas_unicos = [];
-        $ubicaciones_unicas = [];
-        
-        // Obtener datos del formulario
+        // NUEVO: Validar datos duplicados antes de procesar
+        $datosDuplicados = [];
         if (isset($_POST['lpn']) && is_array($_POST['lpn'])) {
-            // Primera pasada: Agrupar por LPN y contar cajas, y recolectar datos únicos
             foreach ($_POST['lpn'] as $index => $lpn) {
                 $lpn = trim($lpn);
-                $id_caja = isset($_POST['id_caja'][$index]) ? trim($_POST['id_caja'][$index]) : '';
                 $ubicacion = isset($_POST['ubicacion'][$index]) ? trim($_POST['ubicacion'][$index]) : '';
                 
-                if (!empty($lpn) && !empty($id_caja) && !empty($ubicacion)) {
-                    // Agrupar para histórico
-                    if (!isset($registros_por_lpn[$lpn])) {
-                        $registros_por_lpn[$lpn] = [
-                            'cantidad' => 0,
-                            'ubicacion' => $ubicacion
-                        ];
+                if (!empty($lpn)) {
+                    if (validarExistencia('LPN', $lpn, $conn)) {
+                        $datosDuplicados[] = "LPN: $lpn";
                     }
-                    $registros_por_lpn[$lpn]['cantidad']++;
-                    
-                    // Recolectar datos únicos para las nuevas tablas Master
-                    if (!empty($lpn) && !isset($lpns_unicos[$lpn])) {
-                        $lpns_unicos[$lpn] = true;
-                    }
-                    
-                    if (!empty($id_caja) && !isset($idcajas_unicos[$id_caja])) {
-                        $idcajas_unicos[$id_caja] = true;
-                    }
-                    
-                    if (!empty($ubicacion) && !isset($ubicaciones_unicas[$ubicacion])) {
-                        $ubicaciones_unicas[$ubicacion] = true;
-                    }
-                }
-            }
-            
-            // Segunda pasada: Insertar en MasterTable
-            foreach ($_POST['lpn'] as $index => $lpn) {
-                $lpn = trim($lpn);
-                $id_caja = isset($_POST['id_caja'][$index]) ? trim($_POST['id_caja'][$index]) : '';
-                $ubicacion = isset($_POST['ubicacion'][$index]) ? trim($_POST['ubicacion'][$index]) : '';
-                
-                // Solo procesar si LPN, ID_Caja y Ubicación no están vacíos
-                if (!empty($lpn) && !empty($id_caja) && !empty($ubicacion)) {
-                    // Insertar en la tabla MasterTable CON SEDE
-                    $sql_master = "INSERT INTO DPL.pruebas.MasterTable 
-                                  (LPN, ID_Caja, Ubicacion, Usuario, FechaHora, Sede) 
-                                  VALUES (?, ?, ?, ?, ?, ?)";
-                    
-                    $params_master = array(
-                        $lpn,
-                        $id_caja,
-                        $ubicacion,
-                        $usuario,
-                        $fecha_hora,  // Usa la hora ajustada aquí
-                        $sede
-                    );
-                    
-                    $stmt_master = sqlsrv_prepare($conn, $sql_master, $params_master);
-                    
-                    if ($stmt_master) {
-                        if (sqlsrv_execute($stmt_master)) {
-                            $registros_procesados++;
-                            $ultimo_lpn = $lpn;
-                            $ultima_ubicacion = $ubicacion;
-                        } else {
-                            $registros_con_error++;
-                            $errores_detalle[] = "Error en MasterTable registro $index: " . print_r(sqlsrv_errors(), true);
-                        }
-                        sqlsrv_free_stmt($stmt_master);
-                    } else {
-                        $registros_con_error++;
-                        $errores_detalle[] = "Error preparando MasterTable registro $index: " . print_r(sqlsrv_errors(), true);
-                    }
-                }
-            }
-            
-            // ============================================
-            // NUEVO: INSERTAR EN TABLAS MASTER ADICIONALES
-            // ============================================
-            
-            $masterlpn_insertados = 0;
-            $mastercaja_insertados = 0;
-            $masterubicacion_insertados = 0;
-            
-            // Insertar LPNs únicos en MasterLPN
-            foreach (array_keys($lpns_unicos) as $lpn) {
-                try {
-                    $sql_masterlpn = "INSERT INTO DPL.pruebas.MasterLPN (lpn, fecha, sede) 
-                                     VALUES (?, ?, ?)";
-                    
-                    $params_masterlpn = array($lpn, $fecha_solo, $sede);
-                    $stmt_masterlpn = sqlsrv_prepare($conn, $sql_masterlpn, $params_masterlpn);
-                    
-                    if ($stmt_masterlpn && sqlsrv_execute($stmt_masterlpn)) {
-                        $masterlpn_insertados++;
-                    }
-                    sqlsrv_free_stmt($stmt_masterlpn);
-                } catch (Exception $e) {
-                    // Ignorar errores de duplicados (UNIQUE constraint)
-                    error_log("Error insertando LPN $lpn en MasterLPN: " . $e->getMessage());
-                }
-            }
-            
-            // Insertar IDs de caja únicos en MasterCaja
-            foreach (array_keys($idcajas_unicos) as $idcaja) {
-                try {
-                    $sql_mastercaja = "INSERT INTO DPL.pruebas.MasterCaja (IdCaja, fecha, sede) 
-                                      VALUES (?, ?, ?)";
-                    
-                    $params_mastercaja = array($idcaja, $fecha_solo, $sede);
-                    $stmt_mastercaja = sqlsrv_prepare($conn, $sql_mastercaja, $params_mastercaja);
-                    
-                    if ($stmt_mastercaja && sqlsrv_execute($stmt_mastercaja)) {
-                        $mastercaja_insertados++;
-                    }
-                    sqlsrv_free_stmt($stmt_mastercaja);
-                } catch (Exception $e) {
-                    // Ignorar errores de duplicados (UNIQUE constraint)
-                    error_log("Error insertando IdCaja $idcaja en MasterCaja: " . $e->getMessage());
-                }
-            }
-            
-            // Insertar ubicaciones únicas en MasterUbicacion
-            foreach (array_keys($ubicaciones_unicas) as $ubicacion) {
-                try {
-                    $sql_masterubicacion = "INSERT INTO DPL.pruebas.MasterUbicacion (Ubicacion, fecha, sede) 
-                                          VALUES (?, ?, ?)";
-                    
-                    $params_masterubicacion = array($ubicacion, $fecha_solo, $sede);
-                    $stmt_masterubicacion = sqlsrv_prepare($conn, $sql_masterubicacion, $params_masterubicacion);
-                    
-                    if ($stmt_masterubicacion && sqlsrv_execute($stmt_masterubicacion)) {
-                        $masterubicacion_insertados++;
-                    }
-                    sqlsrv_free_stmt($stmt_masterubicacion);
-                } catch (Exception $e) {
-                    // Ignorar errores de duplicados (UNIQUE constraint)
-                    error_log("Error insertando Ubicacion $ubicacion en MasterUbicacion: " . $e->getMessage());
-                }
-            }
-            
-            // Tercera pasada: Insertar en Historico por cada LPN único
-            $historico_insertados = 0;
-            if ($registros_procesados > 0 && !empty($registros_por_lpn)) {
-                foreach ($registros_por_lpn as $lpn => $datos) {
-                    $cantidad_cajas = $datos['cantidad'];
-                    $ubicacion_lpn = $datos['ubicacion'];
-                    
-                    // Texto más corto y optimizado que incluye sede
-                    $accion = "Ingreso de $cantidad_cajas cajas con el LPN: $lpn, en la ubicacion $ubicacion_lpn por el usuario $usuario en Sede: $sede";
-                    
-                    // Insertar en la tabla Historico CON SEDE
-                    $sql_historico = "INSERT INTO DPL.pruebas.Historico 
-                                     (LPN, CantidadCajas, Ubicacion, FechaHora, Usuario, Accion, Sede) 
-                                     VALUES (?, ?, ?, ?, ?, ?, ?)";
-                    
-                    $params_historico = array(
-                        $lpn,
-                        $cantidad_cajas,
-                        $ubicacion_lpn,
-                        $fecha_hora,  // Usa la hora ajustada aquí también
-                        $usuario,
-                        $accion,
-                        $sede
-                    );
-                    
-                    $stmt_historico = sqlsrv_prepare($conn, $sql_historico, $params_historico);
-                    
-                    if ($stmt_historico) {
-                        if (sqlsrv_execute($stmt_historico)) {
-                            $historico_insertados++;
-                        } else {
-                            error_log("Error insertando en Historico para LPN $lpn: " . print_r(sqlsrv_errors(), true));
-                        }
-                        sqlsrv_free_stmt($stmt_historico);
-                    }
-                }
-            }
-            
-            // Mensajes finales
-            if ($registros_procesados > 0) {
-                $mensaje = "✅ $registros_procesados registro(s) insertado(s) correctamente.";
-                $mensaje .= "<br>📍 <strong>Sede registrada:</strong> $sede";
-                $mensaje .= "<br>🕐 <strong>Hora registrada:</strong> $fecha_formateada (ajustada -4h)";
-                
-                // Información sobre las nuevas tablas Master
-                $mensaje .= "<br><br><strong>📊 Registros en tablas Master:</strong>";
-                $mensaje .= "<br>• <strong>MasterLPN:</strong> $masterlpn_insertados LPN(s) único(s)";
-                $mensaje .= "<br>• <strong>MasterCaja:</strong> $mastercaja_insertados ID(s) de caja único(s)";
-                $mensaje .= "<br>• <strong>MasterUbicacion:</strong> $masterubicacion_insertados ubicacion(es) única(s)";
-                
-                if ($historico_insertados > 0) {
-                    $mensaje .= "<br><br>📜 $historico_insertados registro(s) en Historico.";
-                } else {
-                    $mensaje .= "<br><br>⚠️ <strong>Nota:</strong> No se pudo guardar el registro histórico.";
                 }
                 
-                if ($registros_con_error > 0) {
-                    $mensaje .= "<br>⚠️ Hubo $registros_con_error error(es) en MasterTable.";
-                }
-            } else {
-                $error = "❌ No se insertaron registros. Verifique que los campos obligatorios estén completos.";
-                if (!empty($errores_detalle)) {
-                    $error .= " Detalles: " . implode(" | ", $errores_detalle);
+                if (!empty($ubicacion)) {
+                    if (validarExistencia('Ubicacion', $ubicacion, $conn)) {
+                        $datosDuplicados[] = "Ubicación: $ubicacion";
+                    }
                 }
             }
-        } else {
-            $error = "❌ No se recibieron datos del formulario.";
         }
         
-        sqlsrv_close($conn);
+        // Si hay datos duplicados, no procesar
+        if (!empty($datosDuplicados)) {
+            $error = "❌ No se puede guardar porque hay datos duplicados en la base de datos: " . implode(", ", $datosDuplicados);
+            sqlsrv_close($conn);
+        } else {
+            // Procesar múltiples registros si existen
+            $registros_procesados = 0;
+            $registros_con_error = 0;
+            $errores_detalle = [];
+            
+            // Agrupar registros por LPN para el histórico
+            $registros_por_lpn = [];
+            
+            // Conjuntos para evitar duplicados en las nuevas tablas Master
+            $lpns_unicos = [];
+            $idcajas_unicos = [];
+            $ubicaciones_unicas = [];
+            
+            // Obtener datos del formulario
+            if (isset($_POST['lpn']) && is_array($_POST['lpn'])) {
+                // Primera pasada: Agrupar por LPN y contar cajas, y recolectar datos únicos
+                foreach ($_POST['lpn'] as $index => $lpn) {
+                    $lpn = trim($lpn);
+                    $id_caja = isset($_POST['id_caja'][$index]) ? trim($_POST['id_caja'][$index]) : '';
+                    $ubicacion = isset($_POST['ubicacion'][$index]) ? trim($_POST['ubicacion'][$index]) : '';
+                    
+                    if (!empty($lpn) && !empty($id_caja) && !empty($ubicacion)) {
+                        // Agrupar para histórico
+                        if (!isset($registros_por_lpn[$lpn])) {
+                            $registros_por_lpn[$lpn] = [
+                                'cantidad' => 0,
+                                'ubicacion' => $ubicacion
+                            ];
+                        }
+                        $registros_por_lpn[$lpn]['cantidad']++;
+                        
+                        // Recolectar datos únicos para las nuevas tablas Master
+                        if (!empty($lpn) && !isset($lpns_unicos[$lpn])) {
+                            $lpns_unicos[$lpn] = true;
+                        }
+                        
+                        if (!empty($id_caja) && !isset($idcajas_unicos[$id_caja])) {
+                            $idcajas_unicos[$id_caja] = true;
+                        }
+                        
+                        if (!empty($ubicacion) && !isset($ubicaciones_unicas[$ubicacion])) {
+                            $ubicaciones_unicas[$ubicacion] = true;
+                        }
+                    }
+                }
+                
+                // Segunda pasada: Insertar en MasterTable
+                foreach ($_POST['lpn'] as $index => $lpn) {
+                    $lpn = trim($lpn);
+                    $id_caja = isset($_POST['id_caja'][$index]) ? trim($_POST['id_caja'][$index]) : '';
+                    $ubicacion = isset($_POST['ubicacion'][$index]) ? trim($_POST['ubicacion'][$index]) : '';
+                    
+                    // Solo procesar si LPN, ID_Caja y Ubicación no están vacíos
+                    if (!empty($lpn) && !empty($id_caja) && !empty($ubicacion)) {
+                        // Insertar en la tabla MasterTable CON SEDE
+                        $sql_master = "INSERT INTO DPL.pruebas.MasterTable 
+                                      (LPN, ID_Caja, Ubicacion, Usuario, FechaHora, Sede) 
+                                      VALUES (?, ?, ?, ?, ?, ?)";
+                        
+                        $params_master = array(
+                            $lpn,
+                            $id_caja,
+                            $ubicacion,
+                            $usuario,
+                            $fecha_hora,  // Usa la hora ajustada aquí
+                            $sede
+                        );
+                        
+                        $stmt_master = sqlsrv_prepare($conn, $sql_master, $params_master);
+                        
+                        if ($stmt_master) {
+                            if (sqlsrv_execute($stmt_master)) {
+                                $registros_procesados++;
+                                $ultimo_lpn = $lpn;
+                                $ultima_ubicacion = $ubicacion;
+                            } else {
+                                $registros_con_error++;
+                                $errores_detalle[] = "Error en MasterTable registro $index: " . print_r(sqlsrv_errors(), true);
+                            }
+                            sqlsrv_free_stmt($stmt_master);
+                        } else {
+                            $registros_con_error++;
+                            $errores_detalle[] = "Error preparando MasterTable registro $index: " . print_r(sqlsrv_errors(), true);
+                        }
+                    }
+                }
+                
+                // ============================================
+                // NUEVO: INSERTAR EN TABLAS MASTER ADICIONALES
+                // ============================================
+                
+                $masterlpn_insertados = 0;
+                $mastercaja_insertados = 0;
+                $masterubicacion_insertados = 0;
+                
+                // Insertar LPNs únicos en MasterLPN
+                foreach (array_keys($lpns_unicos) as $lpn) {
+                    try {
+                        $sql_masterlpn = "INSERT INTO DPL.pruebas.MasterLPN (lpn, fecha, sede) 
+                                         VALUES (?, ?, ?)";
+                        
+                        $params_masterlpn = array($lpn, $fecha_solo, $sede);
+                        $stmt_masterlpn = sqlsrv_prepare($conn, $sql_masterlpn, $params_masterlpn);
+                        
+                        if ($stmt_masterlpn && sqlsrv_execute($stmt_masterlpn)) {
+                            $masterlpn_insertados++;
+                        }
+                        sqlsrv_free_stmt($stmt_masterlpn);
+                    } catch (Exception $e) {
+                        // Ignorar errores de duplicados (UNIQUE constraint)
+                        error_log("Error insertando LPN $lpn en MasterLPN: " . $e->getMessage());
+                    }
+                }
+                
+                // Insertar IDs de caja únicos en MasterCaja
+                foreach (array_keys($idcajas_unicos) as $idcaja) {
+                    try {
+                        $sql_mastercaja = "INSERT INTO DPL.pruebas.MasterCaja (IdCaja, fecha, sede) 
+                                          VALUES (?, ?, ?)";
+                        
+                        $params_mastercaja = array($idcaja, $fecha_solo, $sede);
+                        $stmt_mastercaja = sqlsrv_prepare($conn, $sql_mastercaja, $params_mastercaja);
+                        
+                        if ($stmt_mastercaja && sqlsrv_execute($stmt_mastercaja)) {
+                            $mastercaja_insertados++;
+                        }
+                        sqlsrv_free_stmt($stmt_mastercaja);
+                    } catch (Exception $e) {
+                        // Ignorar errores de duplicados (UNIQUE constraint)
+                        error_log("Error insertando IdCaja $idcaja en MasterCaja: " . $e->getMessage());
+                    }
+                }
+                
+                // Insertar ubicaciones únicas en MasterUbicacion
+                foreach (array_keys($ubicaciones_unicas) as $ubicacion) {
+                    try {
+                        $sql_masterubicacion = "INSERT INTO DPL.pruebas.MasterUbicacion (Ubicacion, fecha, sede) 
+                                              VALUES (?, ?, ?)";
+                        
+                        $params_masterubicacion = array($ubicacion, $fecha_solo, $sede);
+                        $stmt_masterubicacion = sqlsrv_prepare($conn, $sql_masterubicacion, $params_masterubicacion);
+                        
+                        if ($stmt_masterubicacion && sqlsrv_execute($stmt_masterubicacion)) {
+                            $masterubicacion_insertados++;
+                        }
+                        sqlsrv_free_stmt($stmt_masterubicacion);
+                    } catch (Exception $e) {
+                        // Ignorar errores de duplicados (UNIQUE constraint)
+                        error_log("Error insertando Ubicacion $ubicacion en MasterUbicacion: " . $e->getMessage());
+                    }
+                }
+                
+                // Tercera pasada: Insertar en Historico por cada LPN único
+                $historico_insertados = 0;
+                if ($registros_procesados > 0 && !empty($registros_por_lpn)) {
+                    foreach ($registros_por_lpn as $lpn => $datos) {
+                        $cantidad_cajas = $datos['cantidad'];
+                        $ubicacion_lpn = $datos['ubicacion'];
+                        
+                        // Texto más corto y optimizado que incluye sede
+                        $accion = "Ingreso de $cantidad_cajas cajas con el LPN: $lpn, en la ubicacion $ubicacion_lpn por el usuario $usuario en Sede: $sede";
+                        
+                        // Insertar en la tabla Historico CON SEDE
+                        $sql_historico = "INSERT INTO DPL.pruebas.Historico 
+                                         (LPN, CantidadCajas, Ubicacion, FechaHora, Usuario, Accion, Sede) 
+                                         VALUES (?, ?, ?, ?, ?, ?, ?)";
+                        
+                        $params_historico = array(
+                            $lpn,
+                            $cantidad_cajas,
+                            $ubicacion_lpn,
+                            $fecha_hora,  // Usa la hora ajustada aquí también
+                            $usuario,
+                            $accion,
+                            $sede
+                        );
+                        
+                        $stmt_historico = sqlsrv_prepare($conn, $sql_historico, $params_historico);
+                        
+                        if ($stmt_historico) {
+                            if (sqlsrv_execute($stmt_historico)) {
+                                $historico_insertados++;
+                            } else {
+                                error_log("Error insertando en Historico para LPN $lpn: " . print_r(sqlsrv_errors(), true));
+                            }
+                            sqlsrv_free_stmt($stmt_historico);
+                        }
+                    }
+                }
+                
+                // Mensajes finales
+                if ($registros_procesados > 0) {
+                    $mensaje = "✅ $registros_procesados registro(s) insertado(s) correctamente.";
+                    $mensaje .= "<br>📍 <strong>Sede registrada:</strong> $sede";
+                    $mensaje .= "<br>🕐 <strong>Hora registrada:</strong> $fecha_formateada (ajustada -4h)";
+                    
+                    // Información sobre las nuevas tablas Master
+                    $mensaje .= "<br><br><strong>📊 Registros en tablas Master:</strong>";
+                    $mensaje .= "<br>• <strong>MasterLPN:</strong> $masterlpn_insertados LPN(s) único(s)";
+                    $mensaje .= "<br>• <strong>MasterCaja:</strong> $mastercaja_insertados ID(s) de caja único(s)";
+                    $mensaje .= "<br>• <strong>MasterUbicacion:</strong> $masterubicacion_insertados ubicacion(es) única(s)";
+                    
+                    if ($historico_insertados > 0) {
+                        $mensaje .= "<br><br>📜 $historico_insertados registro(s) en Historico.";
+                    } else {
+                        $mensaje .= "<br><br>⚠️ <strong>Nota:</strong> No se pudo guardar el registro histórico.";
+                    }
+                    
+                    if ($registros_con_error > 0) {
+                        $mensaje .= "<br>⚠️ Hubo $registros_con_error error(es) en MasterTable.";
+                    }
+                } else {
+                    $error = "❌ No se insertaron registros. Verifique que los campos obligatorios estén completos.";
+                    if (!empty($errores_detalle)) {
+                        $error .= " Detalles: " . implode(" | ", $errores_detalle);
+                    }
+                }
+            } else {
+                $error = "❌ No se recibieron datos del formulario.";
+            }
+            
+            sqlsrv_close($conn);
+        }
     }
 }
 ?>
@@ -383,6 +439,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             padding: 8px;
             border-bottom: 1px solid #f0f0f0;
             vertical-align: middle;
+            position: relative;
         }
         
         .ingreso-table tr:hover {
@@ -415,6 +472,28 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             cursor: not-allowed;
         }
         
+        /* NUEVO: Estilos para validación */
+        .input-duplicado {
+            border-color: #dc3545 !important;
+            background-color: #ffe6e6 !important;
+            box-shadow: 0 0 0 2px rgba(220,53,69,0.1) !important;
+        }
+        
+        .input-valido {
+            border-color: #28a745 !important;
+            background-color: #f0fff4 !important;
+            box-shadow: 0 0 0 2px rgba(40,167,69,0.1) !important;
+        }
+        
+        .estado-validacion {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 14px;
+            z-index: 1;
+        }
+        
         .required-field::after {
             content: " *";
             color: #dc3545;
@@ -437,6 +516,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         .btn-ingreso:hover {
             transform: translateY(-1px);
             box-shadow: 0 3px 10px rgba(0, 154, 63, 0.3);
+        }
+        
+        .btn-ingreso:disabled {
+            opacity: 0.6 !important;
+            cursor: not-allowed !important;
+            background: linear-gradient(135deg, #6c757d, #5a6268) !important;
         }
         
         .btn-secondary-ingreso {
@@ -550,6 +635,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             to { transform: rotate(360deg); }
         }
         
+        /* NUEVO: Mensaje de duplicados */
+        #mensajeDuplicados {
+            margin-top: 15px;
+            animation: fadeIn 0.3s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
         /* Responsive ESPECÍFICO para la tabla (NO afecta el menú) */
         @media (max-width: 768px) {
             .welcome-title {
@@ -579,6 +675,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             .form-container {
                 overflow-x: auto;
                 -webkit-overflow-scrolling: touch;
+            }
+            
+            .estado-validacion {
+                right: 5px;
+                font-size: 12px;
             }
         }
         
@@ -672,15 +773,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
             <!-- CONTENIDO PRINCIPAL CON CLASES DEL TEMPLATE -->
             <div class="right_col" role="main">
-                
-                
                 <div class="clearfix"></div>
                 
                 <div class="row">
                     <div class="col-md-12 col-sm-12">
-                        <!-- Sección de Bienvenida -->
-                        
-
                         <!-- Mensajes -->
                         <?php if (!empty($mensaje)): ?>
                             <div class="alert-ingreso alert-success-ingreso">
@@ -757,6 +853,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                                         <li><strong>Ubicación:</strong> Misma ubicación para todo el pallet</li>
                                         <li><strong>Sede:</strong> Se registra automáticamente según su usuario (<?php echo $_SESSION['tienda'] ?? 'N/A'; ?>)</li>
                                         <li><strong>Ctrl+S:</strong> Guarda todos los registros</li>
+                                        <li><strong>Validación:</strong> Los campos LPN y Ubicación se validan automáticamente contra la base de datos</li>
                                     </ul>
                                 </div>
                             </div>
@@ -791,6 +888,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     let usuario = '<?php echo htmlspecialchars($_SESSION['usuario'] ?? ''); ?>';
     let sede = '<?php echo htmlspecialchars($_SESSION['tienda'] ?? ''); ?>';
 
+    // NUEVO: Array para rastrear datos duplicados
+    let datosDuplicados = {
+        lpn: new Set(),
+        ubicacion: new Set()
+    };
+
     // ============================================
     // FUNCIONES DEL MENÚ LATERAL (EXACTAMENTE IGUALES)
     // ============================================
@@ -807,6 +910,187 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         const leftCol = document.querySelector('.left_col');
         leftCol.classList.toggle('menu-open');
     });
+
+    // ============================================
+    // NUEVO: FUNCIONES DE VALIDACIÓN
+    // ============================================
+    
+    // Función para validar campo con AJAX
+    function validarCampo(campo, valor, filaId) {
+        if (!valor.trim()) {
+            // Si está vacío, quitar marcador de duplicado y restaurar estilo
+            const input = document.querySelector(`#fila-${filaId} input[name="${campo}[]"]`);
+            if (input) {
+                input.classList.remove('input-duplicado', 'input-valido');
+                input.style.borderColor = '';
+                input.style.backgroundColor = '';
+                input.style.boxShadow = '';
+            }
+            
+            // Remover icono de estado
+            const iconoEstado = document.querySelector(`#fila-${filaId} .estado-validacion`);
+            if (iconoEstado) iconoEstado.remove();
+            
+            // Quitar de datos duplicados
+            if (campo === 'lpn') {
+                datosDuplicados.lpn.delete(valor);
+            } else if (campo === 'ubicacion') {
+                datosDuplicados.ubicacion.delete(valor);
+            }
+            
+            actualizarEstadoBotonGuardar();
+            return;
+        }
+        
+        // Mostrar indicador de validación
+        const input = document.querySelector(`#fila-${filaId} input[name="${campo}[]"]`);
+        if (!input) return;
+        
+        // Remover icono anterior si existe
+        const iconoAnterior = input.parentNode.querySelector('.estado-validacion');
+        if (iconoAnterior) iconoAnterior.remove();
+        
+        // Crear y agregar icono de validación
+        const iconoValidando = document.createElement('span');
+        iconoValidando.innerHTML = ' <i class="fa fa-spinner fa-spin" style="color:#007bff;"></i>';
+        iconoValidando.className = 'estado-validacion';
+        iconoValidando.id = `validando-${campo}-${filaId}`;
+        input.parentNode.appendChild(iconoValidando);
+        
+        // Hacer petición AJAX
+        fetch('validar_existencia.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: `campo=${campo}&valor=${encodeURIComponent(valor)}`
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Error en la respuesta del servidor');
+            }
+            return response.json();
+        })
+        .then(data => {
+            // Remover icono de validación
+            const icono = document.getElementById(`validando-${campo}-${filaId}`);
+            if (icono) icono.remove();
+            
+            const input = document.querySelector(`#fila-${filaId} input[name="${campo}[]"]`);
+            if (!input) return;
+            
+            // Crear icono de estado
+            const iconoEstado = document.createElement('span');
+            iconoEstado.className = 'estado-validacion';
+            iconoEstado.style.marginLeft = '5px';
+            
+            if (data.existe) {
+                // Marcar como duplicado
+                input.classList.add('input-duplicado');
+                input.classList.remove('input-valido');
+                input.style.borderColor = '#dc3545';
+                input.style.backgroundColor = '#ffe6e6';
+                input.style.boxShadow = '0 0 0 2px rgba(220,53,69,0.1)';
+                
+                iconoEstado.innerHTML = ' <i class="fa fa-exclamation-triangle" style="color:#dc3545;" title="Ya existe en la base de datos"></i>';
+                
+                if (campo === 'lpn') {
+                    datosDuplicados.lpn.add(valor);
+                } else if (campo === 'ubicacion') {
+                    datosDuplicados.ubicacion.add(valor);
+                }
+            } else {
+                // Marcar como válido
+                input.classList.add('input-valido');
+                input.classList.remove('input-duplicado');
+                input.style.borderColor = '#28a745';
+                input.style.backgroundColor = '#f0fff4';
+                input.style.boxShadow = '0 0 0 2px rgba(40,167,69,0.1)';
+                
+                iconoEstado.innerHTML = ' <i class="fa fa-check-circle" style="color:#28a745;" title="Dato válido"></i>';
+                
+                if (campo === 'lpn') {
+                    datosDuplicados.lpn.delete(valor);
+                } else if (campo === 'ubicacion') {
+                    datosDuplicados.ubicacion.delete(valor);
+                }
+            }
+            
+            // Reemplazar o agregar icono de estado
+            const iconoExistente = input.parentNode.querySelector('.estado-validacion');
+            if (iconoExistente) {
+                iconoExistente.remove();
+            }
+            input.parentNode.appendChild(iconoEstado);
+            
+            actualizarEstadoBotonGuardar();
+        })
+        .catch(error => {
+            console.error('Error en validación:', error);
+            const icono = document.getElementById(`validando-${campo}-${filaId}`);
+            if (icono) icono.remove();
+            
+            // En caso de error, restaurar estilo normal
+            const input = document.querySelector(`#fila-${filaId} input[name="${campo}[]"]`);
+            if (input) {
+                input.classList.remove('input-duplicado', 'input-valido');
+                input.style.borderColor = '';
+                input.style.backgroundColor = '';
+                input.style.boxShadow = '';
+            }
+        });
+    }
+
+    // Función para actualizar estado del botón Guardar
+    function actualizarEstadoBotonGuardar() {
+        const btnGuardar = document.getElementById('btnGuardar');
+        const mensajeError = document.getElementById('mensajeDuplicados');
+        
+        const totalDuplicados = datosDuplicados.lpn.size + datosDuplicados.ubicacion.size;
+        
+        if (totalDuplicados > 0) {
+            // Desactivar botón
+            btnGuardar.disabled = true;
+            btnGuardar.style.opacity = '0.6';
+            btnGuardar.style.cursor = 'not-allowed';
+            
+            // Crear o actualizar mensaje de error
+            if (!mensajeError) {
+                const nuevoMensaje = document.createElement('div');
+                nuevoMensaje.id = 'mensajeDuplicados';
+                nuevoMensaje.className = 'alert-ingreso alert-danger-ingreso';
+                nuevoMensaje.style.marginTop = '15px';
+                nuevoMensaje.innerHTML = '<i class="fa fa-exclamation-circle"></i> <strong>Advertencia:</strong> Hay datos duplicados en la base de datos. Verifique los campos marcados en rojo.';
+                
+                // Insertar después del formulario
+                const form = document.getElementById('ingresoForm');
+                form.appendChild(nuevoMensaje);
+            }
+            
+            // Actualizar lista de duplicados en mensaje
+            let listaDuplicados = [];
+            if (datosDuplicados.lpn.size > 0) {
+                listaDuplicados.push(`LPNs: ${Array.from(datosDuplicados.lpn).join(', ')}`);
+            }
+            if (datosDuplicados.ubicacion.size > 0) {
+                listaDuplicados.push(`Ubicaciones: ${Array.from(datosDuplicados.ubicacion).join(', ')}`);
+            }
+            
+            if (mensajeError) {
+                mensajeError.innerHTML = `<i class="fa fa-exclamation-circle"></i> <strong>Advertencia:</strong> Datos duplicados encontrados (${listaDuplicados.join('; ')}). No se puede guardar hasta corregirlos.`;
+            }
+        } else {
+            // Activar botón
+            btnGuardar.disabled = false;
+            btnGuardar.style.opacity = '1';
+            btnGuardar.style.cursor = 'pointer';
+            
+            // Eliminar mensaje de error si existe
+            if (mensajeError) {
+                mensajeError.remove();
+            }
+        }
+    }
 
     // ============================================
     // FUNCIONES PARA EL FORMULARIO DE INGRESO
@@ -849,7 +1133,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             }
         }
         
-        // CAMBIO: ID de caja siempre en blanco
+        // ID de caja siempre en blanco
         let idCajaValor = '';
         
         // Crear nueva fila
@@ -860,28 +1144,36 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         nuevaFila.innerHTML = `
             <td style="text-align: center; font-weight: bold;">${numeroFila}</td>
             <td>
-                <input type="text" 
-                       class="table-input" 
-                       name="lpn[]" 
-                       placeholder="PALLET-001"
-                       onkeydown="manejarTeclado(event, ${numeroFila}, 'lpn')"
-                       value="${lpnValor}">
+                <div style="position: relative;">
+                    <input type="text" 
+                           class="table-input" 
+                           name="lpn[]" 
+                           placeholder="PALLET-001"
+                           onkeydown="manejarTeclado(event, ${numeroFila}, 'lpn')"
+                           onblur="validarCampo('lpn', this.value, ${numeroFila})"
+                           value="${lpnValor}">
+                </div>
             </td>
             <td>
-                <input type="text" 
-                       class="table-input" 
-                       name="id_caja[]" 
-                       placeholder="CAJA-001"
-                       onkeydown="manejarTeclado(event, ${numeroFila}, 'id_caja')"
-                       value="${idCajaValor}">
+                <div style="position: relative;">
+                    <input type="text" 
+                           class="table-input" 
+                           name="id_caja[]" 
+                           placeholder="CAJA-001"
+                           onkeydown="manejarTeclado(event, ${numeroFila}, 'id_caja')"
+                           value="${idCajaValor}">
+                </div>
             </td>
             <td>
-                <input type="text" 
-                       class="table-input" 
-                       name="ubicacion[]" 
-                       placeholder="RACK-01-A"
-                       onkeydown="manejarTeclado(event, ${numeroFila}, 'ubicacion')"
-                       value="${ubicacionValor}">
+                <div style="position: relative;">
+                    <input type="text" 
+                           class="table-input" 
+                           name="ubicacion[]" 
+                           placeholder="RACK-01-A"
+                           onkeydown="manejarTeclado(event, ${numeroFila}, 'ubicacion')"
+                           onblur="validarCampo('ubicacion', this.value, ${numeroFila})"
+                           value="${ubicacionValor}">
+                </div>
             </td>
             <td>
                 <input type="text" 
@@ -914,50 +1206,41 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         tbody.appendChild(nuevaFila);
         actualizarContador();
         
-        return nuevaFila;
-    }
-
-    // Función para contar cajas por LPN (se mantiene pero ya no se usa para autocompletar)
-    function contarCajasPorLPN(lpn) {
-        let contador = 0;
-        document.querySelectorAll('input[name="lpn[]"]').forEach(input => {
-            if (input.value === lpn) {
-                const fila = input.closest('tr');
-                const inputIdCaja = fila.querySelector('input[name="id_caja[]"]');
-                if (inputIdCaja && inputIdCaja.value) contador++;
+        // Si hay valores propagados, validarlos
+        setTimeout(() => {
+            if (lpnValor) {
+                validarCampo('lpn', lpnValor, numeroFila);
             }
-        });
-        return contador;
-    }
-
-    // Función para actualizar LPN (MODIFICADA: Ya NO regenera IDs de caja)
-    function actualizarLPN(filaId) {
-        const fila = document.getElementById(`fila-${filaId}`);
-        if (!fila) return;
+            if (ubicacionValor) {
+                validarCampo('ubicacion', ubicacionValor, numeroFila);
+            }
+        }, 500);
         
-        const inputLPN = fila.querySelector('input[name="lpn[]"]');
-        const lpn = inputLPN.value.trim();
-        
-        if (!lpn) return;
-        
-        // CAMBIO: Ya NO se actualizan automáticamente los IDs de caja
-        // Se deja vacío para que el usuario ingrese manualmente
-    }
-
-    // Función para actualizar ubicación
-    function actualizarUbicacion(filaId) {
-        const fila = document.getElementById(`fila-${filaId}`);
-        if (!fila) return;
+        return nuevaFila;
     }
 
     // Función para eliminar una fila
     function eliminarFila(id) {
         const fila = document.getElementById(`fila-${id}`);
         if (fila) {
+            // Remover de datosDuplicados
+            const inputLPN = fila.querySelector('input[name="lpn[]"]');
+            const inputUbicacion = fila.querySelector('input[name="ubicacion[]"]');
+            
+            if (inputLPN && inputLPN.value) {
+                datosDuplicados.lpn.delete(inputLPN.value);
+            }
+            if (inputUbicacion && inputUbicacion.value) {
+                datosDuplicados.ubicacion.delete(inputUbicacion.value);
+            }
+            
             fila.remove();
             contadorFilas--;
             actualizarContador();
             reordenarNumeros();
+            
+            // Actualizar estado del botón
+            actualizarEstadoBotonGuardar();
             
             // Si no hay filas, agregar una nueva
             if (contadorFilas === 0) {
@@ -980,10 +1263,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 inputs.forEach(input => {
                     if (input.name === 'lpn[]') {
                         input.setAttribute('onkeydown', `manejarTeclado(event, ${index + 1}, 'lpn')`);
+                        input.setAttribute('onblur', `validarCampo('lpn', this.value, ${index + 1})`);
                     } else if (input.name === 'id_caja[]') {
                         input.setAttribute('onkeydown', `manejarTeclado(event, ${index + 1}, 'id_caja')`);
                     } else if (input.name === 'ubicacion[]') {
                         input.setAttribute('onkeydown', `manejarTeclado(event, ${index + 1}, 'ubicacion')`);
+                        input.setAttribute('onblur', `validarCampo('ubicacion', this.value, ${index + 1})`);
                     }
                 });
                 
@@ -1045,7 +1330,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             }
         } else if (event.ctrlKey && tecla === 's') {
             event.preventDefault();
-            document.getElementById('ingresoForm').submit();
+            if (!document.getElementById('btnGuardar').disabled) {
+                document.getElementById('ingresoForm').submit();
+            }
         } else if (tecla === 'F2') {
             event.preventDefault();
             const fila = document.getElementById(`fila-${filaId}`);
@@ -1074,6 +1361,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
     // Función para validar formulario
     function validarFormulario() {
+        // Verificar si hay datos duplicados
+        const totalDuplicados = datosDuplicados.lpn.size + datosDuplicados.ubicacion.size;
+        if (totalDuplicados > 0) {
+            alert('No se puede guardar porque hay datos duplicados en la base de datos. Por favor, corrija los campos marcados en rojo.');
+            return false;
+        }
+        
+        // Resto de la validación existente...
         let registrosValidos = 0;
         let registrosInvalidos = [];
         
@@ -1136,10 +1431,15 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         document.addEventListener('keydown', function(event) {
             if (event.ctrlKey && event.key === 's') {
                 event.preventDefault();
-                document.getElementById('ingresoForm').submit();
+                if (!document.getElementById('btnGuardar').disabled) {
+                    document.getElementById('ingresoForm').submit();
+                }
             }
         });
+        
+        // Inicializar estado del botón
+        actualizarEstadoBotonGuardar();
     });
-</script>
+    </script>
 </body>
 </html>
