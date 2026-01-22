@@ -135,7 +135,7 @@ if (!empty($filtro_cliente) || !empty($filtro_num_caja) || !empty($filtro_lpn) |
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Traslados - RANSA</title>
+    <title>Translados - RANSA</title>
 
     <!-- CSS del template EXACTAMENTE IGUAL QUE ransa_main.php -->
     <link href="vendors/bootstrap/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -631,7 +631,7 @@ if (!empty($filtro_cliente) || !empty($filtro_num_caja) || !empty($filtro_lpn) |
                     <div class="navbar nav_title" style="border: 0;">
                         <a href="ransa_main.php" class="site_title">
                             <img src="img/logo.png" alt="RANSA Logo" style="height: 32px;">
-                            <span style="font-size: 12px; margin-left: 4px;">Traslados</span>
+                            <span style="font-size: 12px; margin-left: 4px;">Translados</span>
                         </a>
                     </div>
                     <div class="clearfix"></div>
@@ -659,7 +659,7 @@ if (!empty($filtro_cliente) || !empty($filtro_num_caja) || !empty($filtro_lpn) |
                                     <a href="ingreso.php"><i class="fa fa-archive"></i> Ingreso</a>
                                 </li>
                                 <li class="active">
-                                    <a href="translado.php"><i class="fa fa-refresh"></i> Traslado</a>
+                                    <a href="translado.php"><i class="fa fa-refresh"></i> Translado</a>
                                 </li>
                                 <li>
                                     <a href="reportes.php"><i class="fa fa-bar-chart"></i> Vista</a>
